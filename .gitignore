@@ -53,7 +53,7 @@
 /existing_terms.txt
 /existing_terms_NEW.txt
 /fdr_analysis_summary.md
-/figure_2.ipynb
+# /figure_2.ipynb
 /function_disorder_rate_fdr_analysis.csv
 /function_mlb.pkl
 /function_test_disorder_rate.tsv
