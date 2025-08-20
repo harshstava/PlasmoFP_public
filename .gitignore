@@ -62,7 +62,7 @@
 /function_test_predictions_and_FDR_new
 /gene_annotation_stats_with_PFP_new_threshold.csv
 /generate_counts.ipynb
-/generate_embeddings.py
+# /generate_embeddings.py
 /generate_fdr_predictions.py
 /go-basic.obo
 /gocheck_do_not_annotate.obo
