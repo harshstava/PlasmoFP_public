@@ -108,6 +108,6 @@
 /tmp.ipynb
 /train_CNN_ALL.ipynb
 /uncertainty_analysis - Copy.py
-/uncertainty_analysis.py
+# /uncertainty_analysis.py
 /utils.py
 /verify_cumulative_fdr_behavior.py
