@@ -1,4 +1,5 @@
 /.DS_Store
+*.csv
 /ALL-TM-Vec_models
 /BP_percent_growth.tsv
 /CAFA_5_all_data_proteinData.pkl
@@ -21,7 +22,6 @@
 /all_TM_vec.ipynb
 /analyze_fdr_threshold_metrics.py
 /annotation_stats
-/arch tune
 /baseline_results
 /blast_foldseek_eval.ipynb
 /bp_publish
