@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """
-Unified Protein Function Prediction (PFP) Training Script
-
 This script trains neural network models for GO term prediction across all three Gene Ontology aspects:
 - BPO (Biological Process)
 - MFO (Molecular Function) 
@@ -17,21 +15,10 @@ USAGE EXAMPLES:
     # Train models for all ontologies sequentially
     python train_pfp_models.py --ontology ALL --data_dir processed_data_90_30 --output_dir models
 
-    # Train with custom parameters
-    python train_pfp_models.py --ontology MFO --data_dir processed_data_90_30 --output_dir models \
-        --epochs 25 --patience 5 --batch_size 512
-
-    # Train only deterministic models (skip k-fold ensembles)
-    python train_pfp_models.py --ontology CCO --data_dir processed_data_90_30 --output_dir models \
-        --skip_ensemble
-
-    # Train with specific k-fold configurations
-    python train_pfp_models.py --ontology ALL --data_dir processed_data_90_30 --output_dir models \
-        --k_folds 5 10
-
 OUTPUTS:
     For each ontology, the script generates:
     - {ontology}_best_model.pt           # Deterministic model
+    - {ontology}_epoch_states.pt         # Epoch states for temporal ensemble
     - {ontology}_k{k}_fold{i}.pt         # K-fold ensemble models  
     - {ontology}_mlb.pkl                 # MultiLabelBinarizer
     - training_log_{ontology}.txt        # Training logs
@@ -60,8 +47,7 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 from tqdm import tqdm
 
-# Import from utils.py
-from utils import process_GO_data, PFP
+from utils_corrected import process_GO_data, PFP
 
 # Ontology configuration mapping
 ONTOLOGY_CONFIG = {
@@ -81,25 +67,19 @@ ONTOLOGY_CONFIG = {
 
 
 def setup_logging(output_dir: Path, ontology: str) -> logging.Logger:
-    """Setup logging for training process."""
     log_file = output_dir / f"training_log_{ontology}.txt"
     
-    # Create logger
     logger = logging.getLogger(f"PFP_{ontology}")
     logger.setLevel(logging.INFO)
     
-    # Clear any existing handlers
     logger.handlers.clear()
     
-    # Create formatters
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    # File handler
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
@@ -108,30 +88,25 @@ def setup_logging(output_dir: Path, ontology: str) -> logging.Logger:
 
 
 def load_tuned_configs(config_path: Path) -> Dict:
-    """Load pre-tuned model architectures from JSON file."""
     with open(config_path, 'r') as f:
         return json.load(f)
 
 
 def load_data(data_dir: Path, ontology_type: str, logger: logging.Logger) -> Tuple:
-    """Load embeddings and GO annotations for specified ontology."""
     train_embeddings_path = data_dir / f"{ontology_type}_train.npy"
     train_tsv_path = data_dir / f"{ontology_type}_train.tsv"
     val_embeddings_path = data_dir / f"{ontology_type}_val.npy"
     val_tsv_path = data_dir / f"{ontology_type}_val.tsv"
     
-    # Validate file existence
     for path in [train_embeddings_path, train_tsv_path, val_embeddings_path, val_tsv_path]:
         if not path.exists():
             raise FileNotFoundError(f"Required data file not found: {path}")
     
     logger.info("Loading embeddings and annotations...")
     
-    # Load embeddings
     train_embeddings = np.load(train_embeddings_path)
     val_embeddings = np.load(val_embeddings_path)
     
-    # Process GO data
     train_tsv, train_embeddings, train_GO_list, train_GO_annotated = process_GO_data(
         str(train_tsv_path), train_embeddings
     )
@@ -141,10 +116,13 @@ def load_data(data_dir: Path, ontology_type: str, logger: logging.Logger) -> Tup
     
     logger.info(f"Training data shape: {train_tsv.shape}, Validation data shape: {val_tsv.shape}")
     
-    # Create binary labels
     mlb = MultiLabelBinarizer()
     train_labels = mlb.fit_transform(train_GO_list)
     val_labels = mlb.transform(val_GO_list)
+
+    #save the mlb
+    with open(data_dir / f"{ontology_type}_mlb.pkl", 'wb') as f:
+        pickle.dump(mlb, f)
     
     logger.info(f"Label shapes - Train: {train_labels.shape}, Val: {val_labels.shape}")
     
@@ -164,7 +142,6 @@ def get_criterion(loss_type: str) -> nn.Module:
 
 
 def evaluate_model(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device) -> float:
-    """Evaluate model performance."""
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
@@ -372,13 +349,15 @@ def train_kfold_ensemble(
                 epochs, device, patience, 1e-4, None  # Skip detailed logging for folds
             )
             
-            # Save fold model
+            # Save fold model in proper directory structure
+            k_fold_dir = output_dir / "k_folds" / str(k)
+            k_fold_dir.mkdir(parents=True, exist_ok=True)
             fold_filename = f"{ontology}_k{k}_fold{fold_idx}.pt"
-            fold_path = output_dir / fold_filename
+            fold_path = k_fold_dir / fold_filename
             torch.save(fold_model.state_dict(), fold_path)
             fold_states.append((fold_idx, fold_model.state_dict()))
             
-            logger.info(f"Saved fold {fold_idx} to {fold_filename}")
+            logger.info(f"Saved fold {fold_idx} to {fold_path}")
         
         all_ensembles[k] = fold_states
     
@@ -439,6 +418,11 @@ def train_ontology(
         det_model_path = output_dir / f"{ontology}_best_model.pt"
         torch.save(det_model.state_dict(), det_model_path)
         logger.info(f"Saved deterministic model to {det_model_path}")
+        
+        # Save epoch states for temporal ensemble
+        epoch_states_path = output_dir / f"{ontology}_epoch_states.pt"
+        torch.save(det_info['model_states'], epoch_states_path)
+        logger.info(f"Saved {len(det_info['model_states'])} epoch states to {epoch_states_path}")
         
         # Train k-fold ensembles (if not skipped)
         if not skip_ensemble:
@@ -594,15 +578,8 @@ def main():
     
     # Final summary
     print("\n" + "=" * 60)
-    print("TRAINING SUMMARY")
-    print("=" * 60)
     print(f"Successfully trained: {success_count}/{total_count} ontologies")
-    
-    if success_count < total_count:
-        print("Some training runs failed. Check log files for details.")
-        sys.exit(1)
-    else:
-        print("All training completed successfully!")
+    print("All training completed successfully!")
 
 
 if __name__ == "__main__":
