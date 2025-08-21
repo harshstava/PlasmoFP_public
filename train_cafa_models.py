@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-CAFA Model Training Script
+CAFA-TM-Vec Model
 
 This script trains neural network models for GO term prediction using CAFA sequences
-and the same FFNN architecture as PFP models. The goal is to create general-purpose
-models trained on species-agnostic CAFA data for comparison with phylogenetically-
-specific SAR clade models.
+and the same architecture as PlasmoFP models. 
 
 USAGE:
     python train_cafa_models.py --data_dir cafa_preprocessing --output_dir cafa_publish
@@ -17,9 +15,6 @@ OUTPUTS:
     - {ontology}_optuna_study.pkl        # Complete Optuna study object
     - training_log_{ontology}.txt        # Training logs
 
-DEPENDENCIES:
-    - cafa_preprocessing.py outputs (filtered data and MultiLabelBinarizers)
-    - utils.py (PFP model architecture)
 """
 
 import argparse
@@ -40,30 +35,24 @@ from sklearn.preprocessing import MultiLabelBinarizer
 import optuna
 from tqdm import tqdm
 
-# Import PFP model architecture
-from utils import PFP
+from utils_corrected import PFP
 
 
 def setup_logging(output_dir: Path, ontology: str) -> logging.Logger:
     """Setup logging for training process."""
     log_file = output_dir / f"training_log_{ontology}.txt"
     
-    # Create logger
     logger = logging.getLogger(f"CAFA_{ontology}")
     logger.setLevel(logging.INFO)
     
-    # Clear any existing handlers
     logger.handlers.clear()
     
-    # Create formatters
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    # File handler
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
@@ -74,7 +63,6 @@ def setup_logging(output_dir: Path, ontology: str) -> logging.Logger:
 def load_cafa_data(data_dir: Path, ontology: str, logger: logging.Logger) -> Tuple:
     """Load CAFA preprocessed data for specified ontology."""
     
-    # Map ontology to file prefixes
     ontology_mapping = {
         'MFO': ('MFO', 'function'),
         'BPO': ('BPO', 'process'), 
@@ -83,33 +71,26 @@ def load_cafa_data(data_dir: Path, ontology: str, logger: logging.Logger) -> Tup
     
     prefix, mlb_type = ontology_mapping[ontology]
     
-    # File paths
     tm_vec_go_terms_path = data_dir / f"CAFA_5_{prefix}_tm_vec_go_terms.pkl"
     mlb_path = data_dir.parent / f"{mlb_type}_mlb.pkl"
     
-    # Validate file existence
     for path in [tm_vec_go_terms_path, mlb_path]:
         if not path.exists():
             raise FileNotFoundError(f"Required data file not found: {path}")
     
     logger.info(f"Loading {ontology} data...")
     
-    # Load TM-Vec embeddings and GO terms
     with open(tm_vec_go_terms_path, 'rb') as f:
         tm_vec_go_terms = pickle.load(f)
     
-    # Load MultiLabelBinarizer
     with open(mlb_path, 'rb') as f:
         mlb = pickle.load(f)
     
-    # Extract embeddings and GO terms
     embeddings = [item[0] for item in tm_vec_go_terms]
     go_terms = [item[1] for item in tm_vec_go_terms]
     
-    # Convert to numpy arrays
     embeddings = np.array(embeddings)
     
-    # Binarize GO terms
     labels = mlb.transform(go_terms)
     
     logger.info(f"{ontology} data loaded - Embeddings: {embeddings.shape}, Labels: {labels.shape}")
@@ -147,7 +128,6 @@ def compute_fmax(model: nn.Module, dataloader: DataLoader, device: torch.device)
     predictions = torch.cat(predictions, dim=0)
     targets = torch.cat(targets, dim=0)
     
-    # Calculate F-max across different thresholds
     thresholds = np.arange(0.1, 1.0, 0.1)
     fmax = 0.0
     
@@ -162,7 +142,6 @@ def compute_fmax(model: nn.Module, dataloader: DataLoader, device: torch.device)
 def objective(trial, train_dataset, val_dataset, input_dim: int, output_dim: int, device: torch.device, logger: logging.Logger):
     """Optuna objective function for hyperparameter optimization."""
     
-    # Hyperparameter search spaces (as specified)
     architectures = [
         [256],
         [256, 128],
@@ -173,25 +152,21 @@ def objective(trial, train_dataset, val_dataset, input_dim: int, output_dim: int
     learning_rates = [0.01, 0.001, 0.0001, 0.00001]
     epoch_counts = [10, 15, 20, 30, 40]
     
-    # Suggest hyperparameters
     architecture = trial.suggest_categorical("architecture", architectures)
     learning_rate = trial.suggest_categorical("learning_rate", learning_rates)
     epochs = trial.suggest_categorical("epochs", epoch_counts)
     dropout_rate = trial.suggest_float("dropout_rate", 0.1, 0.5)
-    batch_size = 256  # Fixed as in original notebook
+    batch_size = 256
     
     logger.info(f"Trial {trial.number}: arch={architecture}, lr={learning_rate}, epochs={epochs}, dropout={dropout_rate:.3f}")
     
-    # Initialize model
     model = PFP(input_dim, architecture, output_dim, dropout_rate).to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    # Training loop
     for epoch in range(epochs):
         model.train()
         running_loss = 0.0
@@ -210,7 +185,6 @@ def objective(trial, train_dataset, val_dataset, input_dim: int, output_dim: int
         if (epoch + 1) % 5 == 0:
             logger.info(f"Trial {trial.number}, Epoch {epoch + 1}/{epochs}: Loss = {running_loss:.4f}")
     
-    # Evaluate on validation set
     fmax = compute_fmax(model, val_loader, device)
     logger.info(f"Trial {trial.number} completed: F-max = {fmax:.4f}")
     
@@ -221,7 +195,6 @@ def optimize_hyperparameters(embeddings: np.ndarray, labels: np.ndarray, input_d
                            device: torch.device, logger: logging.Logger, n_trials: int = 50) -> Tuple[Dict, optuna.Study]:
     """Perform hyperparameter optimization using Optuna."""
     
-    # Create dataset and split 90/10 for train/validation
     dataset = ProteinDataset(embeddings, labels)
     train_size = int(0.9 * len(dataset))
     val_size = len(dataset) - train_size
@@ -229,18 +202,14 @@ def optimize_hyperparameters(embeddings: np.ndarray, labels: np.ndarray, input_d
     
     logger.info(f"Optimization split - Train: {len(train_dataset)}, Val: {len(val_dataset)}")
     
-    # Create Optuna study
     study = optuna.create_study(direction="maximize")
     
-    # Define objective wrapper
     def objective_wrapper(trial):
         return objective(trial, train_dataset, val_dataset, input_dim, output_dim, device, logger)
     
-    # Optimize
     logger.info(f"Starting hyperparameter optimization with {n_trials} trials...")
     study.optimize(objective_wrapper, n_trials=n_trials)
     
-    # Get best parameters
     best_params = study.best_params
     best_fmax = study.best_value
     
@@ -257,23 +226,19 @@ def train_final_model(embeddings: np.ndarray, labels: np.ndarray, best_params: D
     
     logger.info("Training final model on full dataset...")
     
-    # Extract best hyperparameters
     architecture = best_params["architecture"]
     learning_rate = best_params["learning_rate"]
     epochs = best_params["epochs"]
     dropout_rate = best_params["dropout_rate"]
     batch_size = 256
     
-    # Create full dataset
     dataset = ProteinDataset(embeddings, labels)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
-    # Initialize model
     model = PFP(input_dim, architecture, output_dim, dropout_rate).to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # Training loop
     logger.info(f"Training for {epochs} epochs with architecture {architecture}")
     
     for epoch in range(epochs):
@@ -300,30 +265,24 @@ def train_final_model(embeddings: np.ndarray, labels: np.ndarray, best_params: D
 def train_ontology(ontology: str, data_dir: Path, output_dir: Path, device: torch.device, n_trials: int = 50):
     """Train model for a specific ontology."""
     
-    # Create output directory for this ontology
     ontology_output_dir = output_dir / f"cafa_{ontology.lower()}_publish"
     ontology_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Setup logging
     logger = setup_logging(ontology_output_dir, ontology)
     
     try:
-        # Load data
         embeddings, labels, mlb = load_cafa_data(data_dir, ontology, logger)
         input_dim = embeddings.shape[1]  # Should be 512 for TM-Vec
         output_dim = labels.shape[1]     # Number of GO terms
         
-        # Optimize hyperparameters
         best_params, study = optimize_hyperparameters(
             embeddings, labels, input_dim, output_dim, device, logger, n_trials
         )
         
-        # Train final model
         final_model = train_final_model(
             embeddings, labels, best_params, input_dim, output_dim, device, logger
         )
         
-        # Save outputs
         model_path = ontology_output_dir / f"{ontology}_best_model.pt"
         params_path = ontology_output_dir / f"{ontology}_best_params.json"
         study_path = ontology_output_dir / f"{ontology}_optuna_study.pkl"
@@ -367,12 +326,10 @@ def main():
     
     args = parser.parse_args()
     
-    # Setup paths
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Setup device
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -382,10 +339,8 @@ def main():
     print(f"Data directory: {data_dir}")
     print(f"Output directory: {output_dir}")
     
-    # Determine ontologies to train
     ontologies = ["MFO", "BPO", "CCO"] if args.ontology == "ALL" else [args.ontology]
     
-    # Train each ontology
     results = {}
     for ontology in ontologies:
         print(f"\n{'='*60}")
@@ -400,7 +355,6 @@ def main():
         else:
             print(f"✗ {ontology} training failed")
     
-    # Summary
     print(f"\n{'='*60}")
     print("TRAINING SUMMARY")
     print(f"{'='*60}")
