@@ -1,5 +1,12 @@
 /.DS_Store
 *.csv
+*.pkl
+*.pt
+*.json
+*.txt
+*.tsv
+*.fasta
+*.md
 /ALL-TM-Vec_models
 /BP_percent_growth.tsv
 /CAFA_5_all_data_proteinData.pkl
@@ -27,7 +34,7 @@
 /bp_publish
 /bp_uncertainty_results
 /cafa_cnn_models
-/cafa_preprocessing
+# /cafa_preprocessing
 /calculate_resnik_similarity.py
 /cc_publish
 /cc_uncertainty_results
