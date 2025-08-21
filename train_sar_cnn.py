@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """
-Unified SAR-CNN Training Script for Protein Function Prediction
-
 This script trains 1D Convolutional Neural Networks for GO term prediction using raw protein sequences.
 Supports all three Gene Ontology aspects: BPO, MFO, and CCO with automated hyperparameter optimization.
 
@@ -25,10 +23,6 @@ USAGE EXAMPLES:
     python train_sar_cnn.py --ontology ALL --data_dir /path/to/fasta_and_tsv --output_dir models \
         --max_length 1500 --batch_size 64
 
-    # Comprehensive evaluation with information content metrics
-    python train_sar_cnn.py --ontology BPO --data_dir /path/to/fasta_and_tsv --output_dir models \
-        --ic_file go_ic.pkl --comprehensive_eval
-
 OUTPUTS:
     For each ontology, the script generates:
     - {ontology}_cnn_best_params.pkl        # Optuna optimization results
@@ -50,13 +44,6 @@ EXPECTED DATA STRUCTURE:
     ├── function_mlb.pkl             # MFO MultiLabelBinarizer
     ├── component_*.fasta/tsv        # CCO files (similar structure)
     └── component_mlb.pkl            # CCO MultiLabelBinarizer
-
-DEPENDENCIES:
-    - torch, numpy, pandas, scikit-learn
-    - optuna (for hyperparameter optimization)
-    - biopython (for FASTA parsing)
-    - tqdm (for progress bars)
-    - utils.py (for evaluation metrics)
 """
 
 import argparse
@@ -81,10 +68,8 @@ from tqdm import tqdm
 import optuna
 import ast
 
-# Import evaluation functions from utils.py
-from utils import threshold_performance_metrics, calculate_aupr_micro, evaluate_annotations
+from utils_corrected import threshold_performance_metrics, calculate_aupr_micro, evaluate_annotations
 
-# Ontology configuration mapping
 ONTOLOGY_CONFIG = {
     'BPO': {
         'type': 'process',
@@ -100,7 +85,6 @@ ONTOLOGY_CONFIG = {
     }
 }
 
-# Amino acid encoding configuration
 AMINO_ACIDS = 'ACDEFGHIKLMNPQRSTVWY'
 AA_TO_INDEX = {aa: i for i, aa in enumerate(AMINO_ACIDS)}
 AA_TO_INDEX['X'] = len(AMINO_ACIDS)  # Non-standard amino acid encoding
@@ -110,22 +94,17 @@ def setup_logging(output_dir: Path, ontology: str) -> logging.Logger:
     """Setup logging for training process."""
     log_file = output_dir / f"cnn_optimization_log_{ontology}.txt"
     
-    # Create logger
     logger = logging.getLogger(f"SAR_CNN_{ontology}")
     logger.setLevel(logging.INFO)
     
-    # Clear existing handlers
     logger.handlers.clear()
     
-    # Create formatters
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    # File handler
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
     
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
@@ -134,15 +113,7 @@ def setup_logging(output_dir: Path, ontology: str) -> logging.Logger:
 
 
 def read_fasta(file_path: Path) -> List[Tuple[str, str]]:
-    """
-    Read FASTA file and return list of (sequence_id, sequence) tuples.
-    
-    Args:
-        file_path: Path to FASTA file
-        
-    Returns:
-        List of (sequence_id, sequence) tuples
-    """
+    """Read FASTA file and return list of (sequence_id, sequence) tuples."""
     sequences = []
     for record in SeqIO.parse(str(file_path), "fasta"):
         sequences.append((record.id, str(record.seq)))
@@ -150,16 +121,7 @@ def read_fasta(file_path: Path) -> List[Tuple[str, str]]:
 
 
 def one_hot_encode_sequence(sequence: str, max_length: int) -> np.ndarray:
-    """
-    One-hot encode a protein sequence to fixed length.
-    
-    Args:
-        sequence: Protein sequence string
-        max_length: Maximum sequence length for padding/truncation
-        
-    Returns:
-        One-hot encoded array of shape (21, max_length)
-    """
+    """One-hot encode a protein sequence to fixed length."""
     encoding = np.zeros((21, max_length), dtype=np.float16)
     
     for i, aa in enumerate(sequence):
@@ -172,17 +134,7 @@ def one_hot_encode_sequence(sequence: str, max_length: int) -> np.ndarray:
 
 
 def process_sequences_batch(sequences: List[str], max_length: int, batch_size: int = 1000) -> np.ndarray:
-    """
-    Process sequences in batches for memory efficiency.
-    
-    Args:
-        sequences: List of protein sequences
-        max_length: Maximum sequence length
-        batch_size: Number of sequences to process at once
-        
-    Returns:
-        Encoded sequences array of shape (num_sequences, 21, max_length)
-    """
+    """Process sequences in batches for memory efficiency."""
     encoded_sequences = []
     
     for i in tqdm(range(0, len(sequences), batch_size), desc="Encoding sequences"):
@@ -199,17 +151,7 @@ def process_sequences_batch(sequences: List[str], max_length: int, batch_size: i
 
 
 class SimpleCNN(nn.Module):
-    """
-    1D Convolutional Neural Network for protein sequence classification.
-    
-    Args:
-        num_classes: Number of output classes (GO terms)
-        max_length: Maximum sequence length
-        conv1_out: Number of filters in first conv layer
-        conv2_out: Number of filters in second conv layer
-        fc_size: Size of fully connected layer
-        dropout_rate: Dropout rate for regularization
-    """
+    """1D CNN for protein sequence classification."""
     
     def __init__(self, num_classes: int, max_length: int, conv1_out: int, conv2_out: int, fc_size: int, dropout_rate: float = 0.5):
         super(SimpleCNN, self).__init__()
@@ -230,22 +172,10 @@ class SimpleCNN(nn.Module):
 
 
 def load_ontology_data(data_dir: Path, ontology: str, max_length: int, logger: logging.Logger) -> Tuple:
-    """
-    Load FASTA sequences and GO annotations for specified ontology.
-    
-    Args:
-        data_dir: Directory containing data files
-        ontology: Ontology identifier (BPO, MFO, CCO)
-        max_length: Maximum sequence length
-        logger: Logger instance
-        
-    Returns:
-        Tuple of processed data (sequences, labels, mlb, etc.)
-    """
+    """Load FASTA sequences and GO annotations for specified ontology."""
     ontology_type = ONTOLOGY_CONFIG[ontology]['type']
     logger.info(f"Loading data for {ontology} ({ontology_type})")
     
-    # Define file paths
     train_fasta = data_dir / f"{ontology_type}_train.fasta"
     val_fasta = data_dir / f"{ontology_type}_val.fasta"
     test_fasta = data_dir / f"{ontology_type}_test.fasta"
@@ -256,13 +186,11 @@ def load_ontology_data(data_dir: Path, ontology: str, max_length: int, logger: l
     
     mlb_file = data_dir / f"{ontology_type}_mlb.pkl"
     
-    # Validate file existence
     required_files = [train_fasta, val_fasta, test_fasta, train_tsv, val_tsv, test_tsv, mlb_file]
     for file_path in required_files:
         if not file_path.exists():
             raise FileNotFoundError(f"Required file not found: {file_path}")
     
-    # Load sequences
     logger.info("Loading FASTA sequences...")
     train_sequences = read_fasta(train_fasta)
     val_sequences = read_fasta(val_fasta)
@@ -279,7 +207,6 @@ def load_ontology_data(data_dir: Path, ontology: str, max_length: int, logger: l
     
     logger.info(f"Loaded {len(train_seqs)} train, {len(val_seqs)} val, {len(test_seqs)} test sequences")
     
-    # Encode sequences
     logger.info("One-hot encoding sequences...")
     train_encoded = process_sequences_batch(train_seqs, max_length)
     val_encoded = process_sequences_batch(val_seqs, max_length)
@@ -287,7 +214,6 @@ def load_ontology_data(data_dir: Path, ontology: str, max_length: int, logger: l
     
     logger.info(f"Encoded shapes: Train {train_encoded.shape}, Val {val_encoded.shape}, Test {test_encoded.shape}")
     
-    # Load GO annotations
     logger.info("Loading GO annotations...")
     
     def load_go_annotations(tsv_path):
@@ -299,11 +225,9 @@ def load_ontology_data(data_dir: Path, ontology: str, max_length: int, logger: l
     val_go_list = load_go_annotations(val_tsv)
     test_go_list = load_go_annotations(test_tsv)
     
-    # Load MultiLabelBinarizer
     with open(mlb_file, 'rb') as f:
         mlb = pickle.load(f)
     
-    # Transform GO annotations to binary labels
     train_labels = mlb.transform(train_go_list)
     val_labels = mlb.transform(val_go_list)
     test_labels = mlb.transform(test_go_list)
@@ -320,7 +244,6 @@ def load_ontology_data(data_dir: Path, ontology: str, max_length: int, logger: l
 
 def train_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, 
                 optimizer: torch.optim.Optimizer, device: torch.device) -> float:
-    """Train model for one epoch."""
     model.train()
     total_loss = 0.0
     num_batches = 0
@@ -339,7 +262,6 @@ def train_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Module,
 
 
 def compute_fmax(model: nn.Module, dataloader: DataLoader, device: torch.device) -> float:
-    """Compute F-max score for validation."""
     model.eval()
     predictions, targets = [], []
     
@@ -352,8 +274,6 @@ def compute_fmax(model: nn.Module, dataloader: DataLoader, device: torch.device)
     
     predictions = torch.cat(predictions, dim=0)
     targets = torch.cat(targets, dim=0)
-    
-    # Test thresholds from 0.1 to 0.9
     thresholds = np.arange(0.1, 1.0, 0.1)
     fmax = 0.0
     
@@ -368,7 +288,6 @@ def compute_fmax(model: nn.Module, dataloader: DataLoader, device: torch.device)
 def train_and_evaluate_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader,
                            criterion: nn.Module, optimizer: torch.optim.Optimizer, 
                            device: torch.device, num_epochs: int) -> float:
-    """Train model and return validation F-max."""
     for epoch in range(num_epochs):
         train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
     
@@ -379,21 +298,16 @@ def train_and_evaluate_model(model: nn.Module, train_loader: DataLoader, val_loa
 def optuna_objective(trial: optuna.Trial, train_loader: DataLoader, val_loader: DataLoader,
                     max_length: int, num_classes: int, device: torch.device, 
                     epochs_per_trial: int) -> float:
-    """Optuna objective function for hyperparameter optimization."""
-    
-    # Hyperparameter search space
     conv1_out = trial.suggest_int('conv1_out', 32, 512)
     conv2_out = trial.suggest_int('conv2_out', 32, 512)
     fc_size = trial.suggest_int('fc_size', 128, 1024)
     dropout_rate = trial.suggest_float('dropout_rate', 0.1, 0.5)
     lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
     
-    # Create model
     model = SimpleCNN(num_classes, max_length, conv1_out, conv2_out, fc_size, dropout_rate).to(device)
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
-    # Train and evaluate
     fmax = train_and_evaluate_model(model, train_loader, val_loader, criterion, optimizer, 
                                    device, epochs_per_trial)
     
@@ -403,8 +317,6 @@ def optuna_objective(trial: optuna.Trial, train_loader: DataLoader, val_loader: 
 def run_optuna_optimization(train_loader: DataLoader, val_loader: DataLoader, max_length: int,
                            num_classes: int, device: torch.device, n_trials: int, 
                            epochs_per_trial: int, logger: logging.Logger) -> Dict:
-    """Run Optuna hyperparameter optimization."""
-    
     logger.info(f"Starting Optuna optimization with {n_trials} trials")
     
     study = optuna.create_study(direction='maximize')
@@ -430,11 +342,8 @@ def run_optuna_optimization(train_loader: DataLoader, val_loader: DataLoader, ma
 def train_final_model(best_params: Dict, train_loader: DataLoader, val_loader: DataLoader,
                      max_length: int, num_classes: int, device: torch.device, 
                      epochs: int, logger: logging.Logger) -> nn.Module:
-    """Train final model with best hyperparameters."""
-    
     logger.info("Training final model with best hyperparameters")
     
-    # Create model with best parameters
     model = SimpleCNN(
         num_classes=num_classes,
         max_length=max_length,
@@ -447,7 +356,6 @@ def train_final_model(best_params: Dict, train_loader: DataLoader, val_loader: D
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=best_params['lr'])
     
-    # Training loop with progress tracking
     for epoch in tqdm(range(epochs), desc="Training final model"):
         train_loss = train_epoch(model, train_loader, criterion, optimizer, device)
         
@@ -455,7 +363,6 @@ def train_final_model(best_params: Dict, train_loader: DataLoader, val_loader: D
             val_fmax = compute_fmax(model, val_loader, device)
             logger.info(f"Epoch {epoch}: Train Loss {train_loss:.4f}, Val F-max {val_fmax:.4f}")
     
-    # Final validation
     final_fmax = compute_fmax(model, val_loader, device)
     logger.info(f"Final validation F-max: {final_fmax:.4f}")
     
@@ -463,7 +370,6 @@ def train_final_model(best_params: Dict, train_loader: DataLoader, val_loader: D
 
 
 def predict_with_model(model: nn.Module, data_loader: DataLoader, device: torch.device) -> np.ndarray:
-    """Generate predictions using trained model."""
     model.eval()
     all_probs = []
     
@@ -491,22 +397,18 @@ def train_ontology_cnn(ontology: str, data_dir: Path, output_dir: Path,
     """Train CNN for specific ontology."""
     
     try:
-        # Setup logging
         logger = setup_logging(output_dir, ontology)
         logger.info(f"Starting CNN training for {ontology} ({ONTOLOGY_CONFIG[ontology]['full_name']})")
         
-        # Load data
         (train_encoded, val_encoded, test_encoded,
          train_labels, val_labels, test_labels,
          train_seq_ids, val_seq_ids, test_seq_ids,
          train_go_list, val_go_list, test_go_list,
          mlb) = load_ontology_data(data_dir, ontology, max_length, logger)
         
-        # Setup device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {device}")
         
-        # Create data loaders
         train_dataset = TensorDataset(
             torch.tensor(train_encoded, dtype=torch.float32),
             torch.tensor(train_labels, dtype=torch.float32)
@@ -523,7 +425,6 @@ def train_ontology_cnn(ontology: str, data_dir: Path, output_dir: Path,
         
         num_classes = len(mlb.classes_)
         
-        # Hyperparameter optimization or use manual parameters
         if skip_optuna and manual_params:
             logger.info("Using manual hyperparameters, skipping Optuna optimization")
             best_params = manual_params
@@ -535,13 +436,11 @@ def train_ontology_cnn(ontology: str, data_dir: Path, output_dir: Path,
             )
             best_params = optuna_results['best_params']
         
-        # Train final model
         final_model = train_final_model(
             best_params, train_loader, val_loader, max_length, 
             num_classes, device, final_epochs, logger
         )
         
-        # Save results
         model_path = output_dir / f"{ontology}_cnn_best_model.pt"
         params_path = output_dir / f"{ontology}_cnn_best_params.pkl"
         
@@ -636,7 +535,6 @@ def main():
         help="Skip Optuna optimization and use manual parameters"
     )
     
-    # Manual hyperparameter options
     parser.add_argument("--conv1_out", type=int, help="First conv layer output channels")
     parser.add_argument("--conv2_out", type=int, help="Second conv layer output channels")
     parser.add_argument("--fc_size", type=int, help="Fully connected layer size")
@@ -651,15 +549,12 @@ def main():
     
     args = parser.parse_args()
     
-    # Validate inputs
     if not args.data_dir.exists():
         print(f"Error: Data directory does not exist: {args.data_dir}")
         sys.exit(1)
     
-    # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Prepare manual parameters if provided
     manual_params = None
     if args.skip_optuna:
         required_params = ['conv1_out', 'conv2_out', 'fc_size', 'dropout_rate', 'lr']
@@ -676,7 +571,6 @@ def main():
             'lr': args.lr
         }
     
-    # Determine ontologies to train
     if args.ontology == 'ALL':
         ontologies = ['BPO', 'MFO', 'CCO']
     else:
@@ -693,7 +587,6 @@ def main():
     print(f"Final training epochs: {args.final_epochs}")
     print("=" * 60)
     
-    # Train each ontology
     success_count = 0
     total_count = len(ontologies)
     
@@ -719,7 +612,6 @@ def main():
         else:
             print(f"✗ Failed to train CNN for {ontology}")
     
-    # Final summary
     print("\n" + "=" * 60)
     print("CNN TRAINING SUMMARY")
     print("=" * 60)
