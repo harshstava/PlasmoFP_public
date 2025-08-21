@@ -43,7 +43,7 @@
 /cluster_word_clouds
 /clustering_results
 /co-occurance
-/co-occurance_publish
+# /co-occurance_publish
 /combined_existing_pfp.txt
 /combined_existing_pfp_NEW.txt
 /component_mlb.pkl
