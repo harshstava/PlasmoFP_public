@@ -1,20 +1,9 @@
 #!/usr/bin/env python3
 """
-Protein Function Prediction with Uncertainty Quantification and FDR Thresholds - FINAL VERSION
-
-This is the final version that uses corrected threshold logic throughout.
-This script extends the original predict_with_uncertainty.py to include evaluation
-using effective FDR thresholds computed from uncertainty analysis. It provides
-both the original probability-based thresholding AND FDR-controlled thresholding.
-
-IMPORTANT: FDR thresholding uses a CLOSEST LOWER FDR approach consistently:
+FDR thresholding uses a CLOSEST LOWER FDR approach consistently:
 - All threshold selection uses utils_corrected.py with the closest lower FDR logic
 - At a given FDR level (e.g., 10%), if no exact threshold exists, use the threshold 
   from the closest lower FDR level (e.g., 9%, 8%, etc.)
-- This maintains statistical validity (actual FDR ≤ target FDR) while reducing 
-  hierarchy violations compared to the max-threshold approach
-- Provides more intuitive and predictable behavior for end users
-- Ensures consistency between build_pred_annots_dict and extract_fdr_thresholds
 - FDR thresholds are applied to effective scores (median - MAD) for uncertainty-aware predictions
 
 EXAMPLE USAGE:
@@ -23,17 +12,13 @@ EXAMPLE USAGE:
 python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
     --bp_tsv bp_test.tsv --cc_tsv cc_test.tsv --mf_tsv mf_test.tsv
 
-# Use custom discrete FDR levels (closest lower FDR approach for missing thresholds)
+# Use custom discrete FDR levels
 python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
     --mf_tsv mf_test.tsv --fdr_levels 0.01 0.05 0.10 0.20
 
 # Use continuous FDR range (0.01 to 0.5 in steps of 0.01)
 python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
     --mf_tsv mf_test.tsv --fdr_range_start 0.01 --fdr_range_end 0.5 --fdr_range_step 0.01
-
-# Use fine-grained continuous FDR range (0.01 to 0.3 in steps of 0.005)
-python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
-    --mf_tsv mf_test.tsv --fdr_range_start 0.01 --fdr_range_end 0.3 --fdr_range_step 0.005
 
 # Skip original probability thresholding, only use FDR
 python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
@@ -58,7 +43,6 @@ from tqdm import tqdm
 from sklearn.preprocessing import MultiLabelBinarizer
 from sklearn.metrics import precision_score, recall_score, f1_score
 
-# Import utility functions from corrected utils
 from utils_corrected import (
     PFP, predict_without_MCD, store_predicted_terms, 
     calculate_sharpness_coverage_and_fdr, process_GO_data,
@@ -67,7 +51,6 @@ from utils_corrected import (
     get_term_threshold, build_pred_annots_dict, compute_effective_scores
 )
 
-# Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
 
@@ -78,13 +61,11 @@ def setup_logging(output_dir: str, verbose: bool = False) -> logging.Logger:
     logger = logging.getLogger('prediction')
     logger.setLevel(log_level)
     
-    # Clear any existing handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
     
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     
-    # File handler
     log_file = os.path.join(output_dir, 'prediction_log.txt')
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(log_level)
@@ -102,7 +83,6 @@ def setup_logging(output_dir: str, verbose: bool = False) -> logging.Logger:
 
 
 def load_mlb(ontology_name: str) -> MultiLabelBinarizer:
-    """Load MultiLabelBinarizer for given ontology."""
     mlb_path = f'{ontology_name}_mlb.pkl'
     if not os.path.exists(mlb_path):
         raise FileNotFoundError(f"MultiLabelBinarizer not found: {mlb_path}")
@@ -113,7 +93,6 @@ def load_mlb(ontology_name: str) -> MultiLabelBinarizer:
 
 
 def load_ic_dict(ic_path: Optional[str], logger: logging.Logger) -> Optional[Dict[str, float]]:
-    """Load Information Content dictionary from TSV file."""
     if ic_path is None:
         ic_path = 'IA_all.tsv'  # Default IC file
     
@@ -122,10 +101,8 @@ def load_ic_dict(ic_path: Optional[str], logger: logging.Logger) -> Optional[Dic
         return None
     
     try:
-        # Load IC values from TSV file (no header, tab-separated)
         ic_df = pd.read_csv(ic_path, sep='\t', header=None, names=['GO_term', 'IC'])
         
-        # Create dictionary mapping GO terms to IC values
         ic_dict = dict(zip(ic_df['GO_term'], ic_df['IC']))
         
         logger.info(f"Loaded IC dictionary with {len(ic_dict)} terms from {ic_path}")
@@ -156,14 +133,7 @@ def load_effective_thresholds(ontology_name: str, logger: logging.Logger) -> Opt
 
 def extract_fdr_thresholds(effective_thresholds: Dict[str, Dict[str, float]], 
                           fdr_level: float) -> Dict[str, float]:
-    """
-    Extract thresholds for a specific FDR level using the corrected utils approach.
-    
-    This function now uses the same closest lower FDR logic as the corrected utils.py:
-    - Uses get_term_threshold from utils_corrected for consistent behavior
-    - Maintains statistical validity while reducing hierarchy violations
-    - Ensures actual FDR ≤ target FDR while providing intuitive behavior
-    """
+    """Extract thresholds for a specific FDR level using the corrected utils approach."""
     term_thresholds = {}
     
     for term in effective_thresholds.keys():
@@ -191,37 +161,30 @@ def evaluate_fdr_predictions(predictions: np.ndarray, true_labels: np.ndarray,
                            mlb: MultiLabelBinarizer, fdr_level: float, 
                            fdr_thresholds: Dict[str, float], test_GO_list: List[List[str]],
                            ic_dict: Optional[Dict[str, float]]) -> Dict[str, Any]:
-    """Evaluate predictions made with FDR thresholds using CAFA-style metrics."""
-    
-    # Calculate basic metrics
+        
     n_samples, n_classes = predictions.shape
     
-    # Convert predictions back to GO term format for CAFA evaluation
     real_annots_dict = {}
     pred_annots_dict = {}
     
     for i in range(n_samples):
         protein_id = f"protein_{i}"
         
-        # Real annotations
         if i < len(test_GO_list):
             real_annots_dict[protein_id] = set(test_GO_list[i])
         else:
             real_annots_dict[protein_id] = set()
         
-        # Predicted annotations (from FDR thresholds)
         predicted_terms = set()
         for j, is_predicted in enumerate(predictions[i]):
             if is_predicted:
                 predicted_terms.add(mlb.classes_[j])
         pred_annots_dict[protein_id] = predicted_terms
     
-    # Use CAFA-style evaluation if IC dictionary is available
     if ic_dict is not None:
         f_macro, p_macro, r_macro, s_min, ru, mi, f_micro, p_micro, r_micro, tp_global, fp_global, fn_global = \
             evaluate_annotations(ic_dict, real_annots_dict, pred_annots_dict)
     else:
-        # Fallback to basic metrics if no IC available
         precision_micro = precision_score(true_labels, predictions, average='micro', zero_division=0)
         recall_micro = recall_score(true_labels, predictions, average='micro', zero_division=0)
         f1_micro = f1_score(true_labels, predictions, average='micro', zero_division=0)
@@ -230,23 +193,19 @@ def evaluate_fdr_predictions(predictions: np.ndarray, true_labels: np.ndarray,
         recall_macro = recall_score(true_labels, predictions, average='macro', zero_division=0)
         f1_macro = f1_score(true_labels, predictions, average='macro', zero_division=0)
         
-        # Set CAFA metrics to None when IC not available
         f_macro, p_macro, r_macro = f1_macro, precision_macro, recall_macro
         f_micro, p_micro, r_micro = f1_micro, precision_micro, recall_micro
         s_min = ru = mi = None
         tp_global = fp_global = fn_global = None
     
-    # Coverage statistics
     terms_with_thresholds = len(fdr_thresholds)
     terms_predicted = np.sum(predictions.sum(axis=0) > 0)  # Terms with at least one prediction
     avg_predictions_per_protein = predictions.sum(axis=1).mean()
     
-    # True positives, false positives, false negatives per term
     tp_per_term = ((predictions == 1) & (true_labels == 1)).sum(axis=0)
     fp_per_term = ((predictions == 1) & (true_labels == 0)).sum(axis=0)
     fn_per_term = ((predictions == 0) & (true_labels == 1)).sum(axis=0)
     
-    # Calculate term-level precision, recall, f1
     term_precision = np.divide(tp_per_term, tp_per_term + fp_per_term, 
                               out=np.zeros_like(tp_per_term, dtype=float), 
                               where=(tp_per_term + fp_per_term) != 0)
@@ -259,28 +218,23 @@ def evaluate_fdr_predictions(predictions: np.ndarray, true_labels: np.ndarray,
     
     return {
         'fdr_level': fdr_level,
-        # CAFA-style metrics (macro)
         'f_macro': f_macro,
         'precision_macro': p_macro,
         'recall_macro': r_macro,
         's_min': s_min,
         'remaining_uncertainty': ru,
         'misinformation': mi,
-        # CAFA-style metrics (micro)  
         'f_micro': f_micro,
         'precision_micro': p_micro,
         'recall_micro': r_micro,
-        # Global counts
         'tp_global': tp_global,
         'fp_global': fp_global,
         'fn_global': fn_global,
-        # Coverage statistics
         'terms_with_thresholds': terms_with_thresholds,
         'terms_predicted': int(terms_predicted),
         'total_terms': n_classes,
         'avg_predictions_per_protein': avg_predictions_per_protein,
         'total_predictions': int(predictions.sum()),
-        # Term-level averages
         'avg_term_precision': term_precision.mean(),
         'avg_term_recall': term_recall.mean(),
         'avg_term_f1': term_f1.mean()
@@ -306,7 +260,6 @@ def load_ensemble_models(models_dir: str, ontology: str, device: torch.device,
     """Load 20-fold ensemble models for given ontology."""
     logger.info(f"Loading 20-fold ensemble for {ontology} from {models_dir}")
     
-    # Load architecture config
     arch_config = load_model_config(ontology)
     
     model_kwargs = {
@@ -316,14 +269,13 @@ def load_ensemble_models(models_dir: str, ontology: str, device: torch.device,
         'dropout_rate': 0.3
     }
     
-    # Load k-fold ensembles
     kf_root = os.path.join(models_dir, "k_folds")
     if not os.path.exists(kf_root):
         raise FileNotFoundError(f"K-fold directory not found: {kf_root}")
     
     ensemble_dict = load_kfold_ensembles(
         kf_root=kf_root,
-        fold_options=[20],  # Only load 20-fold
+        fold_options=[20],
         model_cls=PFP,
         model_kwargs=model_kwargs,
         device=device
@@ -343,13 +295,11 @@ def generate_embeddings_from_fasta(fasta_file: str, output_dir: str,
     """Generate embeddings from FASTA file using generate_embeddings.py"""
     logger.info(f"Generating embeddings from {fasta_file}")
     
-    # Check if generate_embeddings.py exists
     if not os.path.exists('generate_embeddings.py'):
         raise FileNotFoundError("generate_embeddings.py not found in current directory")
     
     embeddings_file = os.path.join(output_dir, 'generated_embeddings.npy')
     
-    # Run embedding generation
     import subprocess
     cmd = [
         'python', 'generate_embeddings.py', 
@@ -383,10 +333,8 @@ def compute_ensemble_predictions(models: List[torch.nn.Module], data_loader: Dat
         probs = predict_without_MCD(model, data_loader, device)
         all_probs.append(probs)
     
-    # Stack predictions: shape (n_models, n_samples, n_classes)
     ensemble_probs = np.stack(all_probs, axis=0)
     
-    # Compute median (central prediction) and MAD (uncertainty)
     median_probs = np.median(ensemble_probs, axis=0)
     mad_uncertainty = chunked_mad_over_runs(ensemble_probs, chunk_size=50)
     
@@ -402,8 +350,6 @@ def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndar
     """Evaluate predictions against ground truth annotations using CAFA-style metrics with three approaches."""
     logger.info(f"Evaluating predictions against {tsv_file} using CAFA-style metrics")
     
-    # Load and process ground truth
-    # Create dummy embeddings with correct shape to match predictions
     n_samples = median_probs.shape[0]
     dummy_embeddings = np.zeros((n_samples, 512))  # Match prediction sample count
     try:
@@ -412,31 +358,24 @@ def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndar
         logger.error(f"Failed to process TSV file {tsv_file}: {e}")
         raise
     
-    # Check if number of samples matches
     if len(test_GO_list) != median_probs.shape[0]:
         logger.warning(f"Sample count mismatch: TSV has {len(test_GO_list)}, predictions have {median_probs.shape[0]}")
-        # Truncate to minimum length
         min_len = min(len(test_GO_list), median_probs.shape[0])
         test_GO_list = test_GO_list[:min_len]
         median_probs = median_probs[:min_len]
         mad_uncertainty = mad_uncertainty[:min_len]
     
-    # Convert data to CAFA format
-    # Real annotations dict: protein_id -> set of GO terms
     real_annots_dict = {}
     for i, go_terms in enumerate(test_GO_list):
         protein_id = f"protein_{i}"
         real_annots_dict[protein_id] = set(go_terms)
     
-    # Use dummy IC dict if not available
     if ic_dict is None:
         logger.warning("No IC dictionary available. Creating dummy IC values (all = 1.0)")
         ic_dict = {go_term: 1.0 for go_term in mlb.classes_}
     
-    # APPROACH 1: Regular median-only thresholding
     logger.info("=== APPROACH 1: Regular Median Thresholding ===")
     
-    # Predicted annotations dict with scores: protein_id -> {go_term: score}
     pred_annots_dict_median = {}
     for i in range(len(median_probs)):
         protein_id = f"protein_{i}"
@@ -446,12 +385,10 @@ def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndar
             go_scores[go_term] = score
         pred_annots_dict_median[protein_id] = go_scores
     
-    # Calculate CAFA-style metrics for median approach
     logger.info("Computing threshold-based metrics (median only)...")
     smin_median, fmax_median, best_threshold_s_median, best_threshold_f_median, s_at_fmax_median, metrics_df_median = \
         threshold_performance_metrics(ic_dict, real_annots_dict, pred_annots_dict_median, threshold_range=thresholds)
     
-    # Add coverage statistics for median approach
     logger.info("Adding coverage statistics (median only)...")
     coverage_stats_median = []
     
@@ -473,22 +410,17 @@ def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndar
     coverage_df_median = pd.DataFrame(coverage_stats_median)
     metrics_df_median = metrics_df_median.merge(coverage_df_median, left_on='n', right_on='threshold', how='left')
     
-    # Calculate AUPR micro for median approach
     logger.info("Computing AUPR micro (median only)...")
     aupr_micro_median = calculate_aupr_micro(real_annots_dict, pred_annots_dict_median)
     
-    # Extract F-max micro for median approach
     fmax_micro_median = metrics_df_median['f_micro'].max()
     best_threshold_f_micro_idx_median = metrics_df_median['f_micro'].idxmax()
     best_threshold_f_micro_median = metrics_df_median.loc[best_threshold_f_micro_idx_median, 'n']
     
-    # APPROACH 2: Median-MAD (effective scores) thresholding
     logger.info("=== APPROACH 2: Median-MAD (Effective Scores) Thresholding ===")
     
-    # Compute effective scores
     effective_scores = median_probs - mad_uncertainty
     
-    # Predicted annotations dict with effective scores: protein_id -> {go_term: score}
     pred_annots_dict_effective = {}
     for i in range(len(effective_scores)):
         protein_id = f"protein_{i}"
@@ -498,12 +430,10 @@ def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndar
             go_scores[go_term] = score
         pred_annots_dict_effective[protein_id] = go_scores
     
-    # Calculate CAFA-style metrics for effective scores approach
     logger.info("Computing threshold-based metrics (median-MAD)...")
     smin_effective, fmax_effective, best_threshold_s_effective, best_threshold_f_effective, s_at_fmax_effective, metrics_df_effective = \
         threshold_performance_metrics(ic_dict, real_annots_dict, pred_annots_dict_effective, threshold_range=thresholds)
     
-    # Add coverage statistics for effective scores approach
     logger.info("Adding coverage statistics (median-MAD)...")
     coverage_stats_effective = []
     
@@ -525,19 +455,15 @@ def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndar
     coverage_df_effective = pd.DataFrame(coverage_stats_effective)
     metrics_df_effective = metrics_df_effective.merge(coverage_df_effective, left_on='n', right_on='threshold', how='left')
     
-    # Calculate AUPR micro for effective scores approach
     logger.info("Computing AUPR micro (median-MAD)...")
     aupr_micro_effective = calculate_aupr_micro(real_annots_dict, pred_annots_dict_effective)
     
-    # Extract F-max micro for effective scores approach
     fmax_micro_effective = metrics_df_effective['f_micro'].max()
     best_threshold_f_micro_idx_effective = metrics_df_effective['f_micro'].idxmax()
     best_threshold_f_micro_effective = metrics_df_effective.loc[best_threshold_f_micro_idx_effective, 'n']
     
-    # Generate predicted terms for compatibility (using median approach)
     predicted_terms = store_predicted_terms(median_probs, mad_uncertainty, thresholds, mlb)
     
-    # Create summary metrics for both approaches
     summary_metrics_median = {
         'approach': 'median_only',
         'fmax_macro': fmax_median,
@@ -589,22 +515,18 @@ def evaluate_fdr_thresholds(median_probs: np.ndarray, mad_uncertainty: np.ndarra
     """Evaluate predictions using FDR thresholds applied to effective scores (median - MAD) at multiple FDR levels."""
     logger.info(f"Evaluating FDR thresholds at levels: {fdr_levels}")
     
-    # Load ground truth
     n_samples = median_probs.shape[0]
     dummy_embeddings = np.zeros((n_samples, 512))
     test_GO_df, _, test_GO_list, _ = process_GO_data(tsv_file, dummy_embeddings)
     
-    # Check sample count
     if len(test_GO_list) != median_probs.shape[0]:
         min_len = min(len(test_GO_list), median_probs.shape[0])
         test_GO_list = test_GO_list[:min_len]
         median_probs = median_probs[:min_len]
         mad_uncertainty = mad_uncertainty[:min_len]
     
-    # Compute effective scores (median - MAD)
     effective_scores = median_probs - mad_uncertainty
     
-    # Convert to binary labels
     true_labels = mlb.transform(test_GO_list)
     
     fdr_results = []
@@ -612,27 +534,22 @@ def evaluate_fdr_thresholds(median_probs: np.ndarray, mad_uncertainty: np.ndarra
     for fdr_level in fdr_levels:
         logger.info(f"Evaluating FDR level: {fdr_level}")
         
-        # Extract thresholds for this FDR level (closest lower FDR approach)
         fdr_thresholds = extract_fdr_thresholds(effective_thresholds, fdr_level)
         
         if not fdr_thresholds:
             logger.warning(f"No thresholds found for FDR level {fdr_level}")
             continue
         
-        # Log threshold statistics
         logger.info(f"FDR {fdr_level}: Found thresholds for {len(fdr_thresholds)} terms")
         if fdr_thresholds:
             threshold_values = list(fdr_thresholds.values())
             logger.info(f"FDR {fdr_level}: Threshold range [{min(threshold_values):.4f}, {max(threshold_values):.4f}]")
         
-        # Apply FDR thresholds to effective scores
         predictions = apply_fdr_thresholds(effective_scores, mlb, fdr_thresholds)
         
-        # Evaluate predictions
         metrics = evaluate_fdr_predictions(predictions, true_labels, mlb, fdr_level, fdr_thresholds, test_GO_list, ic_dict)
         fdr_results.append(metrics)
         
-        # Log results with CAFA-style metrics
         if metrics['s_min'] is not None:
             logger.info(f"FDR {fdr_level}: F-macro={metrics['f_macro']:.4f}, "
                        f"F-micro={metrics['f_micro']:.4f}, "
@@ -645,8 +562,6 @@ def evaluate_fdr_thresholds(median_probs: np.ndarray, mad_uncertainty: np.ndarra
     
     fdr_df = pd.DataFrame(fdr_results)
     
-    # Check FDR behavior: generally expect higher FDR to have more predictions, but 
-    # hierarchy violations are possible with closest lower FDR approach
     if len(fdr_df) > 1:
         logger.info("Checking FDR behavior (closest lower FDR approach):")
         hierarchy_violations = 0
@@ -657,13 +572,13 @@ def evaluate_fdr_thresholds(median_probs: np.ndarray, mad_uncertainty: np.ndarra
             next_predictions = fdr_df.iloc[i + 1]['total_predictions']
             
             if next_predictions >= current_predictions:
-                logger.info(f"  ✓ FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions")
+                logger.info(f"FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions")
             else:
                 hierarchy_violations += 1
-                logger.info(f"  ⚠ FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions (decreased)")
+                logger.info(f"FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions (decreased)")
         
         if hierarchy_violations > 0:
-            logger.info(f"  Note: {hierarchy_violations} hierarchy violations found. This is expected with closest lower FDR approach and maintains statistical validity.")
+            logger.info(f"  Note: {hierarchy_violations} hierarchy violations found.")
     
     return fdr_df
 
@@ -679,19 +594,15 @@ def save_results(ontology: str, median_probs: np.ndarray, mad_uncertainty: np.nd
     ontology_dir = os.path.join(output_dir, ontology.lower())
     os.makedirs(ontology_dir, exist_ok=True)
     
-    # Save median probabilities
     np.save(os.path.join(ontology_dir, 'median_probabilities.npy'), median_probs)
     
-    # Save MAD uncertainty
     np.save(os.path.join(ontology_dir, 'mad_uncertainty.npy'), mad_uncertainty)
     
-    # Save predicted terms dictionary (skip if already saved by save_both_prediction_formats)
     predicted_terms_file = os.path.join(ontology_dir, 'predicted_terms.pkl')
     if not os.path.exists(predicted_terms_file):
         with open(predicted_terms_file, 'wb') as f:
             pickle.dump(predicted_terms, f)
     
-    # Save evaluation metrics if available
     if metrics_df_median is not None:
         metrics_df_median.to_csv(os.path.join(ontology_dir, 'detailed_metrics_median_only.csv'), index=False)
         logger.info(f"Saved median-only metrics to {ontology_dir}/detailed_metrics_median_only.csv")
@@ -700,7 +611,6 @@ def save_results(ontology: str, median_probs: np.ndarray, mad_uncertainty: np.nd
         metrics_df_effective.to_csv(os.path.join(ontology_dir, 'detailed_metrics_median_mad.csv'), index=False)
         logger.info(f"Saved median-MAD metrics to {ontology_dir}/detailed_metrics_median_mad.csv")
     
-    # Save summary metrics
     if summary_metrics_median is not None or summary_metrics_effective is not None:
         combined_summary = {}
         if summary_metrics_median is not None:
@@ -712,7 +622,6 @@ def save_results(ontology: str, median_probs: np.ndarray, mad_uncertainty: np.nd
             json.dump(combined_summary, f, indent=2)
         logger.info(f"Saved combined summary metrics to {ontology_dir}/summary_metrics.json")
     
-    # Save FDR metrics if available
     if fdr_metrics_df is not None:
         fdr_metrics_df.to_csv(os.path.join(ontology_dir, 'fdr_threshold_metrics.csv'), index=False)
         logger.info(f"Saved FDR threshold metrics to {ontology_dir}/fdr_threshold_metrics.csv")
@@ -727,34 +636,27 @@ def main():
         epilog=__doc__
     )
     
-    # Input options (mutually exclusive)
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--fasta', help='Input FASTA file with protein sequences')
     input_group.add_argument('--embeddings', help='Pre-computed embeddings (.npy file)')
     
-    # Required arguments
     parser.add_argument('--output_dir', required=True, help='Output directory for results')
     
-    # Model directories
     parser.add_argument('--bp_models_dir', default='bp_publish', help='Directory containing BPO models')
     parser.add_argument('--cc_models_dir', default='cc_publish', help='Directory containing CCO models') 
     parser.add_argument('--mf_models_dir', default='mf_publish', help='Directory containing MFO models')
     
-    # Evaluation files (optional)
     parser.add_argument('--bp_tsv', help='BPO annotations TSV file for evaluation')
     parser.add_argument('--cc_tsv', help='CCO annotations TSV file for evaluation')
     parser.add_argument('--mf_tsv', help='MFO annotations TSV file for evaluation')
     
-    # IC dictionary (optional, for better CAFA-style metrics)
     parser.add_argument('--ic_file', default='IA_all.tsv', 
                        help='Information Content TSV file for all ontologies (default: IA_all.tsv)')
     
-    # FDR threshold options
     parser.add_argument('--fdr_levels', nargs='+', type=float, 
                        default=[0.01, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
                        help='FDR levels to evaluate (default: 0.01 0.05 0.10 0.15 0.20 0.25 0.30)')
     
-    # FDR range options (alternative to discrete levels)
     parser.add_argument('--fdr_range_start', type=float, default=None,
                        help='Starting FDR value for continuous range (e.g., 0.01)')
     parser.add_argument('--fdr_range_end', type=float, default=None,
@@ -762,14 +664,12 @@ def main():
     parser.add_argument('--fdr_range_step', type=float, default=0.01,
                        help='Step size for FDR range (default: 0.01)')
     
-    # Configuration
     parser.add_argument('--config_file', default='TUNED_MODEL_ARCHS.json',
                        help='JSON file containing model architectures')
     parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for inference')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'auto'], default='auto',
                        help='Device to use for inference')
     
-    # Options
     parser.add_argument('--skip_metrics', action='store_true',
                        help='Skip evaluation metrics computation')
     parser.add_argument('--skip_prob_thresholds', action='store_true',
@@ -780,13 +680,10 @@ def main():
     
     args = parser.parse_args()
     
-    # Setup output directory and logging
     os.makedirs(args.output_dir, exist_ok=True)
     logger = setup_logging(args.output_dir, args.verbose)
     
-    # Determine FDR levels to use
     if args.fdr_range_start is not None and args.fdr_range_end is not None:
-        # Use continuous range
         if args.fdr_range_start >= args.fdr_range_end:
             raise ValueError("fdr_range_start must be less than fdr_range_end")
         if args.fdr_range_step <= 0:
@@ -794,7 +691,6 @@ def main():
         if args.fdr_range_start < 0 or args.fdr_range_end > 1:
             raise ValueError("FDR range values must be between 0 and 1")
         
-        # Generate continuous FDR range
         fdr_levels = np.arange(args.fdr_range_start, args.fdr_range_end + args.fdr_range_step/2, args.fdr_range_step)
         fdr_levels = np.round(fdr_levels, 3)  # Round to avoid floating point precision issues
         logger.info(f"Using continuous FDR range: {args.fdr_range_start} to {args.fdr_range_end} (step: {args.fdr_range_step})")
@@ -802,26 +698,21 @@ def main():
     elif args.fdr_range_start is not None or args.fdr_range_end is not None:
         raise ValueError("Both fdr_range_start and fdr_range_end must be specified when using FDR range")
     else:
-        # Use discrete levels
         fdr_levels = args.fdr_levels
         logger.info(f"Using discrete FDR levels: {fdr_levels}")
     
-    # Validate FDR levels
     if any(fdr < 0 or fdr > 1 for fdr in fdr_levels):
         raise ValueError("All FDR levels must be between 0 and 1")
     
-    # Setup device
     if args.device == 'auto':
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(args.device)
     logger.info(f"Using device: {device}")
     
-    # Setup thresholds
     thresholds = np.round(np.arange(0.01, 1.00, 0.01), 2)
     
     try:
-        # Handle input data
         if args.fasta:
             logger.info(f"Processing FASTA file: {args.fasta}")
             embeddings_file = generate_embeddings_from_fasta(args.fasta, args.output_dir, logger)
@@ -829,21 +720,17 @@ def main():
             logger.info(f"Using pre-computed embeddings: {args.embeddings}")
             embeddings_file = args.embeddings
         
-        # Load embeddings
         if not os.path.exists(embeddings_file):
             raise FileNotFoundError(f"Embeddings file not found: {embeddings_file}")
         
         embeddings = np.load(embeddings_file)
         logger.info(f"Loaded embeddings shape: {embeddings.shape}")
         
-        # Create data loader
         dataset = TensorDataset(torch.tensor(embeddings, dtype=torch.float32))
         data_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
         
-        # Load IC dictionary once for all ontologies
         ic_dict = load_ic_dict(args.ic_file, logger)
         
-        # Process each ontology
         ontology_config = {
             'BPO': {'models_dir': args.bp_models_dir, 'tsv': args.bp_tsv, 'name': 'process'},
             'CCO': {'models_dir': args.cc_models_dir, 'tsv': args.cc_tsv, 'name': 'component'},
@@ -860,22 +747,17 @@ def main():
             
             config = ontology_config[ontology]
             
-            # Load models
             models = load_ensemble_models(config['models_dir'], ontology, device, logger)
             
-            # Load MultiLabelBinarizer
             mlb = load_mlb(config['name'])
             logger.info(f"Loaded MLBs for {len(mlb.classes_)} classes")
             
-            # Load effective thresholds
             effective_thresholds = load_effective_thresholds(config['name'], logger)
             
-            # Compute predictions
             median_probs, mad_uncertainty = compute_ensemble_predictions(
                 models, data_loader, device, logger
             )
             
-            # Generate predicted terms (both original and FDR formats)
             from generate_fdr_predictions import save_both_prediction_formats
             logger.info("Generating predictions in both original and FDR formats...")
             predicted_terms, predicted_terms_fdr = save_both_prediction_formats(
@@ -883,7 +765,6 @@ def main():
                 effective_thresholds, fdr_levels, args.output_dir
             )
             
-            # Log what was generated
             if predicted_terms:
                 logger.info(f"Generated original format: predicted_terms.pkl with {len(predicted_terms)} confidence levels")
             if predicted_terms_fdr:
@@ -891,7 +772,6 @@ def main():
             elif effective_thresholds is None:
                 logger.warning("No effective thresholds available - FDR format not generated")
             
-            # Original probability-based evaluation (median-only and median-MAD)
             metrics_df_median = None
             metrics_df_effective = None
             summary_metrics_median = None
@@ -903,13 +783,11 @@ def main():
                     metrics_df_median, metrics_df_effective, summary_metrics_median, summary_metrics_effective, _ = evaluate_predictions_cafa(
                         median_probs, mad_uncertainty, config['tsv'], mlb, thresholds, ic_dict, logger
                     )
-                    # Store both approaches in overall results
                     overall_results[f"{ontology}_median_only"] = summary_metrics_median
                     overall_results[f"{ontology}_median_mad"] = summary_metrics_effective
                 except Exception as e:
                     logger.error(f"Original evaluation failed for {ontology}: {e}")
             
-            # FDR threshold evaluation
             fdr_metrics_df = None
             if config['tsv'] and not args.skip_metrics and effective_thresholds:
                 try:
@@ -921,17 +799,14 @@ def main():
                 except Exception as e:
                     logger.error(f"FDR evaluation failed for {ontology}: {e}")
             
-            # Save results (predicted_terms files already saved by save_both_prediction_formats)
             save_results(ontology, median_probs, mad_uncertainty, predicted_terms,
                         metrics_df_median, metrics_df_effective, summary_metrics_median, 
                         summary_metrics_effective, fdr_metrics_df, args.output_dir, logger)
         
-        # Save overall summary
         if overall_results:
             with open(os.path.join(args.output_dir, 'overall_summary.json'), 'w') as f:
                 json.dump(overall_results, f, indent=2)
         
-        # Save combined FDR results
         if all_fdr_results:
             combined_fdr_df = pd.DataFrame()
             for ontology, fdr_df in all_fdr_results.items():
@@ -939,14 +814,12 @@ def main():
                 fdr_df_copy['ontology'] = ontology
                 combined_fdr_df = pd.concat([combined_fdr_df, fdr_df_copy], ignore_index=True)
             
-            # Reorder columns to put ontology first
             cols = ['ontology'] + [col for col in combined_fdr_df.columns if col != 'ontology']
             combined_fdr_df = combined_fdr_df[cols]
             
             combined_fdr_df.to_csv(os.path.join(args.output_dir, 'fdr_threshold_metrics_all_ontologies.csv'), index=False)
             logger.info(f"Saved combined FDR metrics to {args.output_dir}/fdr_threshold_metrics_all_ontologies.csv")
         
-        # Print summary
         logger.info(f"\n{'='*60}")
         logger.info("PREDICTION COMPLETED SUCCESSFULLY")
         logger.info(f"{'='*60}")
@@ -962,7 +835,6 @@ def main():
         if overall_results:
             logger.info("\nOriginal Performance Summary (CAFA-style metrics):")
             
-            # Group results by ontology and approach
             ontology_groups = {}
             for key, metrics in overall_results.items():
                 if '_median_only' in key:
@@ -1004,9 +876,8 @@ def main():
                 logger.info(f"    Best F-micro: {fdr_df.loc[best_f_micro_idx, 'f_micro']:.4f} @ FDR {fdr_df.loc[best_f_micro_idx, 'fdr_level']}")
                 logger.info(f"    Best F-macro: {fdr_df.loc[best_f_macro_idx, 'f_macro']:.4f} @ FDR {fdr_df.loc[best_f_macro_idx, 'fdr_level']}")
                 
-                # Also show S-min if available
                 if 's_min' in fdr_df.columns and fdr_df['s_min'].notna().any():
-                    best_s_min_idx = fdr_df['s_min'].idxmin()  # Lower is better for S-min
+                    best_s_min_idx = fdr_df['s_min'].idxmin()
                     logger.info(f"    Best S-min: {fdr_df.loc[best_s_min_idx, 's_min']:.4f} @ FDR {fdr_df.loc[best_s_min_idx, 'fdr_level']}")
         
         logger.info(f"{'='*60}")
