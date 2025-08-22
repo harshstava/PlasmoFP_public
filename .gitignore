@@ -30,7 +30,7 @@
 /analyze_fdr_threshold_metrics.py
 /annotation_stats
 /baseline_results
-/blast_foldseek_eval.ipynb
+# /blast_foldseek_eval.ipynb
 /bp_publish
 /bp_uncertainty_results
 /cafa_cnn_models
