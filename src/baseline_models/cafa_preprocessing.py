@@ -51,12 +51,8 @@ def load_sequences(fasta_path: str, max_length: int = 1200) -> List[SeqRecord]:
     """
     Load protein sequences from FASTA file and filter by length.
     
-    Args:
         fasta_path: Path to FASTA file
         max_length: Maximum sequence length to keep
-        
-    Returns:
-        List of filtered SeqRecord objects
     """
     print(f"Loading sequences from {fasta_path}")
     sequences = list(SeqIO.parse(fasta_path, 'fasta'))
@@ -84,8 +80,6 @@ def load_go_terms(terms_path: str):
     Args:
         terms_path: Path to TSV file with GO terms
         
-    Returns:
-        Tuple of (mfo_mapping, bpo_mapping, cco_mapping)
     """
     print(f"Loading GO terms from {terms_path}")
     terms_df = pd.read_csv(terms_path, sep='\t')
@@ -120,8 +114,6 @@ def create_protein_data_list(sequences, embeddings, mfo_mapping, bpo_mapping, cc
         bpo_mapping: Dict mapping protein IDs to BPO terms
         cco_mapping: Dict mapping protein IDs to CCO terms
         
-    Returns:
-        List of ProteinData objects
     """
     print("Creating protein data objects...")
     protein_data_list = []

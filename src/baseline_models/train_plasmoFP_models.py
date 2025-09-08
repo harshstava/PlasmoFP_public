@@ -1,32 +1,26 @@
 #!/usr/bin/env python3
 """
-This script trains neural network models for GO term prediction across all three Gene Ontology aspects:
-- BPO (Biological Process)
-- MFO (Molecular Function) 
-- CCO (Cellular Component)
-
 The script produces both deterministic models and k-fold ensemble models for uncertainty quantification.
 
-USAGE EXAMPLES:
 
-    # Train models for a specific ontology
-    python train_pfp_models.py --ontology BPO --data_dir processed_data_90_30 --output_dir models
+# Train models for a specific ontology
+python train_pfp_models.py --ontology BPO --data_dir processed_data_90_30 --output_dir models
 
-    # Train models for all ontologies sequentially
-    python train_pfp_models.py --ontology ALL --data_dir processed_data_90_30 --output_dir models
+# Train models for all ontologies sequentially
+python train_pfp_models.py --ontology ALL --data_dir processed_data_90_30 --output_dir models
 
 OUTPUTS:
-    For each ontology, the script generates:
-    - {ontology}_best_model.pt           # Deterministic model
-    - {ontology}_epoch_states.pt         # Epoch states for temporal ensemble
-    - {ontology}_k{k}_fold{i}.pt         # K-fold ensemble models  
-    - {ontology}_mlb.pkl                 # MultiLabelBinarizer
-    - training_log_{ontology}.txt        # Training logs
+For each ontology, the script generates:
+- {ontology}_best_model.pt           # Deterministic model
+- {ontology}_epoch_states.pt         # Epoch states for temporal ensemble
+- {ontology}_k{k}_fold{i}.pt         # K-fold ensemble models  
+- {ontology}_mlb.pkl                 # MultiLabelBinarizer
+- training_log_{ontology}.txt        # Training logs
 
 DEPENDENCIES:
-    - utils.py (must be in same directory)
-    - TUNED_MODEL_ARCHS.json (model configurations)
-    - Processed training data in specified data directory
+- utils_corrected.py 
+- TUNED_MODEL_ARCHS.json 
+- Processed training data in specified data directory
 """
 
 import argparse
@@ -49,7 +43,6 @@ from tqdm import tqdm
 
 from utils_corrected import process_GO_data, PFP
 
-# Ontology configuration mapping
 ONTOLOGY_CONFIG = {
     'BPO': {
         'type': 'process',
@@ -192,18 +185,14 @@ def train_with_early_stopping(
         avg_train = running_train / len(train_loader)
         train_losses.append(avg_train)
         
-        # Validation phase
         avg_val = evaluate_model(model, val_loader, criterion, device)
         val_losses.append(avg_val)
         
-        # Save epoch state
         model_states[epoch] = copy.deepcopy(model.state_dict())
         
-        # Log progress
         if logger:
             logger.info(f"Epoch {epoch:>2}/{num_epochs}  Train Loss: {avg_train:.4f}  Val Loss: {avg_val:.4f}")
         
-        # Check for improvement
         if best_val_loss - avg_val > min_delta:
             best_val_loss = avg_val
             best_model_wts = copy.deepcopy(model.state_dict())
@@ -215,13 +204,11 @@ def train_with_early_stopping(
             if logger:
                 logger.info(f"  ↳ No improvement for {epochs_no_improve} epoch(s).")
         
-        # Early stopping check
         if epochs_no_improve >= patience:
             if logger:
                 logger.info(f"Early stopping triggered at epoch {epoch}.")
             break
     
-    # Restore best weights
     model.load_state_dict(best_model_wts)
     if logger:
         logger.info(f"Training complete. Best Val Loss: {best_val_loss:.4f}")
@@ -251,7 +238,6 @@ def train_deterministic_model(
     
     logger.info(f"Training deterministic model for {ontology}")
     
-    # Create data loaders
     train_dataset = TensorDataset(
         torch.tensor(train_embeddings, dtype=torch.float).to(device),
         torch.tensor(train_labels, dtype=torch.float).to(device)
@@ -264,7 +250,6 @@ def train_deterministic_model(
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    # Initialize model
     model = PFP(
         input_dim=train_embeddings.shape[1],
         hidden_dims=config['CHOSEN_CONFIG_ARCH'],
@@ -272,11 +257,9 @@ def train_deterministic_model(
         dropout_rate=0.3  # Fixed gamma value
     ).to(device)
     
-    # Initialize optimizer and criterion
     optimizer = optim.Adam(model.parameters(), lr=config['CHOSEN_CONFIG_LR'])
     criterion = get_criterion('Balanced')
     
-    # Train model
     model, training_info = train_with_early_stopping(
         model, train_loader, val_loader, criterion, optimizer,
         epochs, device, patience, 1e-4, logger
@@ -304,7 +287,6 @@ def train_kfold_ensemble(
     
     logger.info(f"Training k-fold ensemble models for {ontology} with k={k_folds}")
     
-    # Create validation loader (shared across all folds)
     val_dataset = TensorDataset(
         torch.tensor(val_embeddings, dtype=torch.float32),
         torch.tensor(val_labels, dtype=torch.float32)
@@ -316,14 +298,12 @@ def train_kfold_ensemble(
     for k in k_folds:
         logger.info(f"Training {k}-fold ensemble")
         
-        # Initialize stratified k-fold
         kf = MultilabelStratifiedKFold(n_splits=k, shuffle=True, random_state=42)
         fold_states = []
         
         for fold_idx, (train_idx, _) in enumerate(kf.split(train_embeddings, train_labels), start=1):
             logger.info(f"Training fold {fold_idx}/{k}")
             
-            # Create fold-specific training data
             fold_train_X = torch.tensor(train_embeddings[train_idx], dtype=torch.float32)
             fold_train_Y = torch.tensor(train_labels[train_idx], dtype=torch.float32)
             fold_train_loader = DataLoader(
@@ -332,7 +312,6 @@ def train_kfold_ensemble(
                 shuffle=True
             )
             
-            # Initialize fresh model for this fold
             model = PFP(
                 input_dim=train_embeddings.shape[1],
                 hidden_dims=config['CHOSEN_CONFIG_ARCH'],
@@ -343,13 +322,11 @@ def train_kfold_ensemble(
             optimizer = optim.Adam(model.parameters(), lr=config['CHOSEN_CONFIG_LR'])
             criterion = get_criterion('Balanced')
             
-            # Train fold model
             fold_model, _ = train_with_early_stopping(
                 model, fold_train_loader, val_loader, criterion, optimizer,
                 epochs, device, patience, 1e-4, None  # Skip detailed logging for folds
             )
             
-            # Save fold model in proper directory structure
             k_fold_dir = output_dir / "k_folds" / str(k)
             k_fold_dir.mkdir(parents=True, exist_ok=True)
             fold_filename = f"{ontology}_k{k}_fold{fold_idx}.pt"
@@ -378,33 +355,27 @@ def train_ontology(
     """Train models for a specific ontology."""
     
     try:
-        # Setup logging
         logger = setup_logging(output_dir, ontology)
         logger.info(f"Starting training for {ontology} ({ONTOLOGY_CONFIG[ontology]['full_name']})")
         
-        # Load configurations
         tuned_configs = load_tuned_configs(config_path)
         ontology_config = tuned_configs[ontology]
         ontology_type = ONTOLOGY_CONFIG[ontology]['type']
         
         logger.info(f"Configuration: {ontology_config['CHOSEN_CONFIG']}")
         
-        # Load data
         train_embeddings, val_embeddings, train_labels, val_labels, mlb = load_data(
             data_dir, ontology_type, logger
         )
         
-        # Save MultiLabelBinarizer
         mlb_path = output_dir / f"{ontology}_mlb.pkl"
         with open(mlb_path, 'wb') as f:
             pickle.dump(mlb, f)
         logger.info(f"Saved MultiLabelBinarizer to {mlb_path}")
         
-        # Setup device
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Using device: {device}")
         
-        # Train deterministic model
         logger.info("=" * 50)
         logger.info("TRAINING DETERMINISTIC MODEL")
         logger.info("=" * 50)
@@ -414,17 +385,14 @@ def train_ontology(
             train_labels, val_labels, device, batch_size, epochs, patience, logger
         )
         
-        # Save deterministic model
         det_model_path = output_dir / f"{ontology}_best_model.pt"
         torch.save(det_model.state_dict(), det_model_path)
         logger.info(f"Saved deterministic model to {det_model_path}")
         
-        # Save epoch states for temporal ensemble
         epoch_states_path = output_dir / f"{ontology}_epoch_states.pt"
         torch.save(det_info['model_states'], epoch_states_path)
         logger.info(f"Saved {len(det_info['model_states'])} epoch states to {epoch_states_path}")
         
-        # Train k-fold ensembles (if not skipped)
         if not skip_ensemble:
             logger.info("=" * 50)
             logger.info("TRAINING K-FOLD ENSEMBLES")
@@ -528,7 +496,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Validate inputs
     if not args.data_dir.exists():
         print(f"Error: Data directory does not exist: {args.data_dir}")
         sys.exit(1)
@@ -537,10 +504,8 @@ def main():
         print(f"Error: Configuration file does not exist: {args.config_path}")
         sys.exit(1)
     
-    # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Determine ontologies to train
     if args.ontology == 'ALL':
         ontologies = ['BPO', 'MFO', 'CCO']
     else:
@@ -552,7 +517,6 @@ def main():
     print(f"K-fold configurations: {args.k_folds}")
     print("=" * 60)
     
-    # Train each ontology
     success_count = 0
     total_count = len(ontologies)
     
@@ -576,7 +540,6 @@ def main():
         else:
             print(f"✗ Failed to train {ontology}")
     
-    # Final summary
     print("\n" + "=" * 60)
     print(f"Successfully trained: {success_count}/{total_count} ontologies")
     print("All training completed successfully!")

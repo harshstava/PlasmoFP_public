@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """
-Using PlasmoFP models to predict CAFA data with FDR thresholding
-
-1. Median-only thresholding (baseline)
-2. Median-MAD thresholding (uncertainty-adjusted)  
-3. FDR per-term thresholds (term-specific uncertainty-adjusted)
+FDR thresholding uses a CLOSEST LOWER FDR approach:
+- All threshold selection uses utils_corrected.py with the closest lower FDR logic
+- At a given FDR level (e.g., 10%), if no exact threshold exists, use the threshold 
+  from the closest lower FDR level (e.g., 9%, 8%, etc.)
+- FDR thresholds are applied to effective scores (median - MAD) for uncertainty-aware predictions
 
 EXAMPLE USAGE:
 
-python predict_cafa_with_uncertainty_FINAL.py --output_dir cafa_ood_results
+# Predict with both probability and FDR thresholds
+python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
+    --bp_tsv bp_test.tsv --cc_tsv cc_test.tsv --mf_tsv mf_test.tsv
 
-python predict_cafa_with_uncertainty_FINAL.py --output_dir cafa_ood_results --ontologies BPO MFO
+# Use custom discrete FDR levels
+python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
+    --mf_tsv mf_test.tsv --fdr_levels 0.01 0.05 0.10 0.20
 
-python predict_cafa_with_uncertainty_FINAL.py --output_dir cafa_ood_results --skip_fdr
+# Use continuous FDR range (0.01 to 0.5 in steps of 0.01)
+python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
+    --mf_tsv mf_test.tsv --fdr_range_start 0.01 --fdr_range_end 0.5 --fdr_range_step 0.01
 
-python predict_cafa_with_uncertainty_FINAL.py --output_dir cafa_ood_results --fdr_only
-
-python predict_cafa_with_uncertainty_FINAL.py --output_dir cafa_ood_results --fdr_levels 0.01 0.05 0.10
-
-python predict_cafa_with_uncertainty_FINAL.py --output_dir cafa_ood_results --verbose
+# Skip original probability thresholding, only use FDR
+python predict_with_uncertainty_and_thresholds.py --fasta proteins.fasta --output_dir predictions \
+    --mf_tsv mf_test.tsv --skip_prob_thresholds
 """
 
 import argparse
@@ -54,7 +58,7 @@ def setup_logging(output_dir: str, verbose: bool = False) -> logging.Logger:
     """Setup logging configuration."""
     log_level = logging.DEBUG if verbose else logging.INFO
     
-    logger = logging.getLogger('cafa_prediction')
+    logger = logging.getLogger('prediction')
     logger.setLevel(log_level)
     
     for handler in logger.handlers[:]:
@@ -67,6 +71,7 @@ def setup_logging(output_dir: str, verbose: bool = False) -> logging.Logger:
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     
+    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
@@ -77,92 +82,17 @@ def setup_logging(output_dir: str, verbose: bool = False) -> logging.Logger:
     return logger
 
 
-def load_cafa_data(ontology_name: str, cafa_dir: str, logger: logging.Logger) -> Tuple[np.ndarray, List[List[str]]]:
-    """Load CAFA preprocessed data for given ontology."""
-    logger.info(f"Loading CAFA data for {ontology_name}")
-    
-    ontology_mapping = {
-        'process': 'BPO',
-        'component': 'CCO', 
-        'function': 'MFO'
-    }
-    cafa_ontology = ontology_mapping[ontology_name]
-    
-    data_file = os.path.join(cafa_dir, f'CAFA_5_{cafa_ontology}_tm_vec_go_terms.pkl')
-    
-    if not os.path.exists(data_file):
-        raise FileNotFoundError(f"CAFA data file not found: {data_file}")
-    
-    with open(data_file, 'rb') as f:
-        cafa_data = pickle.load(f)
-    
-    logger.info(f"Loaded {len(cafa_data)} CAFA samples for {ontology_name}")
-    
-    embeddings = []
-    go_terms_list = []
-    
-    for tm_vec, go_terms in cafa_data:
-        if tm_vec is not None:
-            embeddings.append(tm_vec)
-            go_terms_list.append(go_terms)
-    
-    embeddings = np.array(embeddings)
-    logger.info(f"Final embeddings shape: {embeddings.shape}")
-    logger.info(f"GO terms samples: {len(go_terms_list)}")
-    
-    return embeddings, go_terms_list
-
-
-def load_pfp_mlb(ontology_name: str, logger: logging.Logger) -> MultiLabelBinarizer:
-    """Load PFP MultiLabelBinarizer for given ontology."""
+def load_mlb(ontology_name: str) -> MultiLabelBinarizer:
     mlb_path = f'{ontology_name}_mlb.pkl'
     if not os.path.exists(mlb_path):
-        raise FileNotFoundError(f"PFP MultiLabelBinarizer not found: {mlb_path}")
+        raise FileNotFoundError(f"MultiLabelBinarizer not found: {mlb_path}")
     
     with open(mlb_path, 'rb') as f:
         mlb = pickle.load(f)
-    
-    logger.info(f"Loaded PFP MLB with {len(mlb.classes_)} classes for {ontology_name}")
     return mlb
 
 
-def filter_cafa_data_by_pfp_vocab(go_terms_list: List[List[str]], embeddings: np.ndarray, 
-                                  mlb: MultiLabelBinarizer, logger: logging.Logger) -> Tuple[np.ndarray, List[List[str]]]:
-    """Filter CAFA data to only include terms in PFP vocabulary and proteins with >0 terms."""
-    logger.info("Filtering CAFA data by PFP vocabulary...")
-    
-    pfp_vocab = set(mlb.classes_)
-    filtered_embeddings = []
-    filtered_go_terms = []
-    
-    proteins_before = len(go_terms_list)
-    proteins_with_terms = 0
-    proteins_after_filtering = 0
-    
-    for i, go_terms in enumerate(go_terms_list):
-        filtered_terms = [term for term in go_terms if term in pfp_vocab]
-        
-        if go_terms:
-            proteins_with_terms += 1
-        
-        if filtered_terms:
-            filtered_embeddings.append(embeddings[i])
-            filtered_go_terms.append(filtered_terms)
-            proteins_after_filtering += 1
-    
-    filtered_embeddings = np.array(filtered_embeddings)
-    
-    logger.info(f"Filtering results:")
-    logger.info(f"  Original proteins: {proteins_before}")
-    logger.info(f"  Proteins with terms: {proteins_with_terms}")
-    logger.info(f"  Proteins after vocab filtering: {proteins_after_filtering}")
-    logger.info(f"  Filtered embeddings shape: {filtered_embeddings.shape}")
-    
-    return filtered_embeddings, filtered_go_terms
-
-
 def load_ic_dict(ic_path: Optional[str], logger: logging.Logger) -> Optional[Dict[str, float]]:
-    """Load Information Content dictionary from TSV file."""
     if ic_path is None:
         ic_path = 'IA_all.tsv'  # Default IC file
     
@@ -203,6 +133,7 @@ def load_effective_thresholds(ontology_name: str, logger: logging.Logger) -> Opt
 
 def extract_fdr_thresholds(effective_thresholds: Dict[str, Dict[str, float]], 
                           fdr_level: float) -> Dict[str, float]:
+    """Extract thresholds for a specific FDR level using the corrected utils approach."""
     term_thresholds = {}
     
     for term in effective_thresholds.keys():
@@ -215,6 +146,7 @@ def extract_fdr_thresholds(effective_thresholds: Dict[str, Dict[str, float]],
 
 def apply_fdr_thresholds(effective_scores: np.ndarray, mlb: MultiLabelBinarizer, 
                         fdr_thresholds: Dict[str, float]) -> np.ndarray:
+    """Apply term-specific FDR thresholds to effective scores (median - MAD)."""
     predictions = np.zeros_like(effective_scores, dtype=bool)
     
     for i, go_term in enumerate(mlb.classes_):
@@ -229,7 +161,7 @@ def evaluate_fdr_predictions(predictions: np.ndarray, true_labels: np.ndarray,
                            mlb: MultiLabelBinarizer, fdr_level: float, 
                            fdr_thresholds: Dict[str, float], test_GO_list: List[List[str]],
                            ic_dict: Optional[Dict[str, float]]) -> Dict[str, Any]:
-    
+        
     n_samples, n_classes = predictions.shape
     
     real_annots_dict = {}
@@ -267,7 +199,7 @@ def evaluate_fdr_predictions(predictions: np.ndarray, true_labels: np.ndarray,
         tp_global = fp_global = fn_global = None
     
     terms_with_thresholds = len(fdr_thresholds)
-    terms_predicted = np.sum(predictions.sum(axis=0) > 0)
+    terms_predicted = np.sum(predictions.sum(axis=0) > 0)  # Terms with at least one prediction
     avg_predictions_per_protein = predictions.sum(axis=1).mean()
     
     tp_per_term = ((predictions == 1) & (true_labels == 1)).sum(axis=0)
@@ -310,6 +242,7 @@ def evaluate_fdr_predictions(predictions: np.ndarray, true_labels: np.ndarray,
 
 
 def load_model_config(ontology: str, config_file: str = 'TUNED_MODEL_ARCHS.json') -> Dict[str, Any]:
+    """Load model architecture configuration."""
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"Config file not found: {config_file}")
     
@@ -324,6 +257,7 @@ def load_model_config(ontology: str, config_file: str = 'TUNED_MODEL_ARCHS.json'
 
 def load_ensemble_models(models_dir: str, ontology: str, device: torch.device, 
                         logger: logging.Logger) -> List[torch.nn.Module]:
+    """Load 20-fold ensemble models for given ontology."""
     logger.info(f"Loading 20-fold ensemble for {ontology} from {models_dir}")
     
     arch_config = load_model_config(ontology)
@@ -341,7 +275,7 @@ def load_ensemble_models(models_dir: str, ontology: str, device: torch.device,
     
     ensemble_dict = load_kfold_ensembles(
         kf_root=kf_root,
-        fold_options=[20],  # Only load 20-fold
+        fold_options=[20],
         model_cls=PFP,
         model_kwargs=model_kwargs,
         device=device
@@ -356,8 +290,40 @@ def load_ensemble_models(models_dir: str, ontology: str, device: torch.device,
     return models
 
 
+def generate_embeddings_from_fasta(fasta_file: str, output_dir: str, 
+                                  logger: logging.Logger) -> str:
+    """Generate embeddings from FASTA file using generate_embeddings.py"""
+    logger.info(f"Generating embeddings from {fasta_file}")
+    
+    if not os.path.exists('generate_embeddings.py'):
+        raise FileNotFoundError("generate_embeddings.py not found in current directory")
+    
+    embeddings_file = os.path.join(output_dir, 'generated_embeddings.npy')
+    
+    import subprocess
+    cmd = [
+        'python', 'generate_embeddings.py', 
+        '--fasta', fasta_file,
+        '--output', embeddings_file
+    ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        logger.info("Embedding generation completed successfully")
+        logger.debug(f"Embedding generation output: {result.stdout}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Embedding generation failed: {e.stderr}")
+        raise
+    
+    if not os.path.exists(embeddings_file):
+        raise FileNotFoundError(f"Expected embeddings file not created: {embeddings_file}")
+    
+    return embeddings_file
+
+
 def compute_ensemble_predictions(models: List[torch.nn.Module], data_loader: DataLoader, 
                                device: torch.device, logger: logging.Logger) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute ensemble predictions and MAD uncertainty."""
     logger.info("Computing ensemble predictions...")
     
     all_probs = []
@@ -377,32 +343,30 @@ def compute_ensemble_predictions(models: List[torch.nn.Module], data_loader: Dat
     return median_probs, mad_uncertainty
 
 
-def create_tsv_like_data(go_terms_list: List[List[str]], embeddings: np.ndarray) -> Tuple[pd.DataFrame, List]:
-    data = []
-    for i, go_terms in enumerate(go_terms_list):
-        for go_term in go_terms:
-            data.append({
-                'Entry': f'protein_{i}',
-                'GO_term': go_term
-            })
-    
-    if not data:
-        test_GO_df = pd.DataFrame(columns=['Entry', 'GO_term'])
-        return test_GO_df, go_terms_list
-    
-    test_GO_df = pd.DataFrame(data)
-    
-    return test_GO_df, go_terms_list
-
-
 def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndarray, 
-                             go_terms_list: List[List[str]], mlb: MultiLabelBinarizer, 
+                             tsv_file: str, mlb: MultiLabelBinarizer, 
                              thresholds: np.ndarray, ic_dict: Optional[Dict[str, float]],
                              logger: logging.Logger) -> Tuple[pd.DataFrame, pd.DataFrame, Dict, Dict, Dict]:
-    logger.info(f"Evaluating predictions against CAFA annotations using CAFA-style metrics")
+    """Evaluate predictions against ground truth annotations using CAFA-style metrics with three approaches."""
+    logger.info(f"Evaluating predictions against {tsv_file} using CAFA-style metrics")
+    
+    n_samples = median_probs.shape[0]
+    dummy_embeddings = np.zeros((n_samples, 512))  # Match prediction sample count
+    try:
+        test_GO_df, _, test_GO_list, _ = process_GO_data(tsv_file, dummy_embeddings)
+    except Exception as e:
+        logger.error(f"Failed to process TSV file {tsv_file}: {e}")
+        raise
+    
+    if len(test_GO_list) != median_probs.shape[0]:
+        logger.warning(f"Sample count mismatch: TSV has {len(test_GO_list)}, predictions have {median_probs.shape[0]}")
+        min_len = min(len(test_GO_list), median_probs.shape[0])
+        test_GO_list = test_GO_list[:min_len]
+        median_probs = median_probs[:min_len]
+        mad_uncertainty = mad_uncertainty[:min_len]
     
     real_annots_dict = {}
-    for i, go_terms in enumerate(go_terms_list):
+    for i, go_terms in enumerate(test_GO_list):
         protein_id = f"protein_{i}"
         real_annots_dict[protein_id] = set(go_terms)
     
@@ -543,13 +507,27 @@ def evaluate_predictions_cafa(median_probs: np.ndarray, mad_uncertainty: np.ndar
     return metrics_df_median, metrics_df_effective, summary_metrics_median, summary_metrics_effective, predicted_terms
 
 
-def evaluate_fdr_thresholds(effective_scores: np.ndarray, go_terms_list: List[List[str]], mlb: MultiLabelBinarizer,
+def evaluate_fdr_thresholds(median_probs: np.ndarray, mad_uncertainty: np.ndarray, 
+                           tsv_file: str, mlb: MultiLabelBinarizer,
                            effective_thresholds: Dict[str, Dict[str, float]], 
                            fdr_levels: List[float], ic_dict: Optional[Dict[str, float]], 
                            logger: logging.Logger) -> pd.DataFrame:
+    """Evaluate predictions using FDR thresholds applied to effective scores (median - MAD) at multiple FDR levels."""
     logger.info(f"Evaluating FDR thresholds at levels: {fdr_levels}")
     
-    true_labels = mlb.transform(go_terms_list)
+    n_samples = median_probs.shape[0]
+    dummy_embeddings = np.zeros((n_samples, 512))
+    test_GO_df, _, test_GO_list, _ = process_GO_data(tsv_file, dummy_embeddings)
+    
+    if len(test_GO_list) != median_probs.shape[0]:
+        min_len = min(len(test_GO_list), median_probs.shape[0])
+        test_GO_list = test_GO_list[:min_len]
+        median_probs = median_probs[:min_len]
+        mad_uncertainty = mad_uncertainty[:min_len]
+    
+    effective_scores = median_probs - mad_uncertainty
+    
+    true_labels = mlb.transform(test_GO_list)
     
     fdr_results = []
     
@@ -569,7 +547,7 @@ def evaluate_fdr_thresholds(effective_scores: np.ndarray, go_terms_list: List[Li
         
         predictions = apply_fdr_thresholds(effective_scores, mlb, fdr_thresholds)
         
-        metrics = evaluate_fdr_predictions(predictions, true_labels, mlb, fdr_level, fdr_thresholds, go_terms_list, ic_dict)
+        metrics = evaluate_fdr_predictions(predictions, true_labels, mlb, fdr_level, fdr_thresholds, test_GO_list, ic_dict)
         fdr_results.append(metrics)
         
         if metrics['s_min'] is not None:
@@ -594,13 +572,13 @@ def evaluate_fdr_thresholds(effective_scores: np.ndarray, go_terms_list: List[Li
             next_predictions = fdr_df.iloc[i + 1]['total_predictions']
             
             if next_predictions >= current_predictions:
-                logger.info(f"  OK FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions")
+                logger.info(f"FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions")
             else:
                 hierarchy_violations += 1
-                logger.info(f"  WARNING FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions (decreased)")
+                logger.info(f"FDR {current_fdr} -> {next_fdr}: {current_predictions} -> {next_predictions} predictions (decreased)")
         
         if hierarchy_violations > 0:
-            logger.info(f"  Note: {hierarchy_violations} hierarchy violations found. This is expected with closest lower FDR approach and maintains statistical validity.")
+            logger.info(f"  Note: {hierarchy_violations} hierarchy violations found.")
     
     return fdr_df
 
@@ -610,6 +588,7 @@ def save_results(ontology: str, median_probs: np.ndarray, mad_uncertainty: np.nd
                 metrics_df_effective: Optional[pd.DataFrame],
                 summary_metrics_median: Optional[Dict], summary_metrics_effective: Optional[Dict],
                 fdr_metrics_df: Optional[pd.DataFrame], output_dir: str, logger: logging.Logger):
+    """Save all results to output directory."""
     logger.info(f"Saving results for {ontology}")
     
     ontology_dir = os.path.join(output_dir, ontology.lower())
@@ -619,8 +598,10 @@ def save_results(ontology: str, median_probs: np.ndarray, mad_uncertainty: np.nd
     
     np.save(os.path.join(ontology_dir, 'mad_uncertainty.npy'), mad_uncertainty)
     
-    with open(os.path.join(ontology_dir, 'predicted_terms.pkl'), 'wb') as f:
-        pickle.dump(predicted_terms, f)
+    predicted_terms_file = os.path.join(ontology_dir, 'predicted_terms.pkl')
+    if not os.path.exists(predicted_terms_file):
+        with open(predicted_terms_file, 'wb') as f:
+            pickle.dump(predicted_terms, f)
     
     if metrics_df_median is not None:
         metrics_df_median.to_csv(os.path.join(ontology_dir, 'detailed_metrics_median_only.csv'), index=False)
@@ -650,17 +631,24 @@ def save_results(ontology: str, median_probs: np.ndarray, mad_uncertainty: np.nd
 
 def main():
     parser = argparse.ArgumentParser(
-        description='CAFA Protein Function Prediction with Uncertainty Quantification - FINAL VERSION',
+        description='Protein Function Prediction with Uncertainty Quantification and FDR Thresholds',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
     
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument('--fasta', help='Input FASTA file with protein sequences')
+    input_group.add_argument('--embeddings', help='Pre-computed embeddings (.npy file)')
+    
     parser.add_argument('--output_dir', required=True, help='Output directory for results')
     
-    parser.add_argument('--cafa_dir', default='cafa_preprocessing', help='Directory containing CAFA preprocessed data')
     parser.add_argument('--bp_models_dir', default='bp_publish', help='Directory containing BPO models')
     parser.add_argument('--cc_models_dir', default='cc_publish', help='Directory containing CCO models') 
     parser.add_argument('--mf_models_dir', default='mf_publish', help='Directory containing MFO models')
+    
+    parser.add_argument('--bp_tsv', help='BPO annotations TSV file for evaluation')
+    parser.add_argument('--cc_tsv', help='CCO annotations TSV file for evaluation')
+    parser.add_argument('--mf_tsv', help='MFO annotations TSV file for evaluation')
     
     parser.add_argument('--ic_file', default='IA_all.tsv', 
                        help='Information Content TSV file for all ontologies (default: IA_all.tsv)')
@@ -669,27 +657,52 @@ def main():
                        default=[0.01, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30],
                        help='FDR levels to evaluate (default: 0.01 0.05 0.10 0.15 0.20 0.25 0.30)')
     
+    parser.add_argument('--fdr_range_start', type=float, default=None,
+                       help='Starting FDR value for continuous range (e.g., 0.01)')
+    parser.add_argument('--fdr_range_end', type=float, default=None,
+                       help='Ending FDR value for continuous range (e.g., 0.5)')
+    parser.add_argument('--fdr_range_step', type=float, default=0.01,
+                       help='Step size for FDR range (default: 0.01)')
+    
     parser.add_argument('--config_file', default='TUNED_MODEL_ARCHS.json',
                        help='JSON file containing model architectures')
     parser.add_argument('--batch_size', type=int, default=1024, help='Batch size for inference')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'auto'], default='auto',
                        help='Device to use for inference')
     
-    parser.add_argument('--skip_fdr', action='store_true',
-                       help='Skip FDR threshold evaluation (only run approaches 1 & 2)')
-    parser.add_argument('--fdr_only', action='store_true',
-                       help='Skip approaches 1 & 2, only run FDR evaluation (approach 3 only)')
+    parser.add_argument('--skip_metrics', action='store_true',
+                       help='Skip evaluation metrics computation')
+    parser.add_argument('--skip_prob_thresholds', action='store_true',
+                       help='Skip original probability threshold evaluation')
     parser.add_argument('--ontologies', nargs='+', choices=['BPO', 'CCO', 'MFO'], 
                        default=['BPO', 'CCO', 'MFO'], help='Ontologies to predict')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
     
-    if args.skip_fdr and args.fdr_only:
-        parser.error("Cannot use both --skip_fdr and --fdr_only at the same time")
-    
     os.makedirs(args.output_dir, exist_ok=True)
     logger = setup_logging(args.output_dir, args.verbose)
+    
+    if args.fdr_range_start is not None and args.fdr_range_end is not None:
+        if args.fdr_range_start >= args.fdr_range_end:
+            raise ValueError("fdr_range_start must be less than fdr_range_end")
+        if args.fdr_range_step <= 0:
+            raise ValueError("fdr_range_step must be positive")
+        if args.fdr_range_start < 0 or args.fdr_range_end > 1:
+            raise ValueError("FDR range values must be between 0 and 1")
+        
+        fdr_levels = np.arange(args.fdr_range_start, args.fdr_range_end + args.fdr_range_step/2, args.fdr_range_step)
+        fdr_levels = np.round(fdr_levels, 3)  # Round to avoid floating point precision issues
+        logger.info(f"Using continuous FDR range: {args.fdr_range_start} to {args.fdr_range_end} (step: {args.fdr_range_step})")
+        logger.info(f"Generated {len(fdr_levels)} FDR levels")
+    elif args.fdr_range_start is not None or args.fdr_range_end is not None:
+        raise ValueError("Both fdr_range_start and fdr_range_end must be specified when using FDR range")
+    else:
+        fdr_levels = args.fdr_levels
+        logger.info(f"Using discrete FDR levels: {fdr_levels}")
+    
+    if any(fdr < 0 or fdr > 1 for fdr in fdr_levels):
+        raise ValueError("All FDR levels must be between 0 and 1")
     
     if args.device == 'auto':
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -700,12 +713,28 @@ def main():
     thresholds = np.round(np.arange(0.01, 1.00, 0.01), 2)
     
     try:
+        if args.fasta:
+            logger.info(f"Processing FASTA file: {args.fasta}")
+            embeddings_file = generate_embeddings_from_fasta(args.fasta, args.output_dir, logger)
+        else:
+            logger.info(f"Using pre-computed embeddings: {args.embeddings}")
+            embeddings_file = args.embeddings
+        
+        if not os.path.exists(embeddings_file):
+            raise FileNotFoundError(f"Embeddings file not found: {embeddings_file}")
+        
+        embeddings = np.load(embeddings_file)
+        logger.info(f"Loaded embeddings shape: {embeddings.shape}")
+        
+        dataset = TensorDataset(torch.tensor(embeddings, dtype=torch.float32))
+        data_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+        
         ic_dict = load_ic_dict(args.ic_file, logger)
         
         ontology_config = {
-            'BPO': {'models_dir': args.bp_models_dir, 'name': 'process'},
-            'CCO': {'models_dir': args.cc_models_dir, 'name': 'component'},
-            'MFO': {'models_dir': args.mf_models_dir, 'name': 'function'}
+            'BPO': {'models_dir': args.bp_models_dir, 'tsv': args.bp_tsv, 'name': 'process'},
+            'CCO': {'models_dir': args.cc_models_dir, 'tsv': args.cc_tsv, 'name': 'component'},
+            'MFO': {'models_dir': args.mf_models_dir, 'tsv': args.mf_tsv, 'name': 'function'}
         }
         
         overall_results = {}
@@ -718,55 +747,53 @@ def main():
             
             config = ontology_config[ontology]
             
-            cafa_embeddings, cafa_go_terms = load_cafa_data(config['name'], args.cafa_dir, logger)
-            
             models = load_ensemble_models(config['models_dir'], ontology, device, logger)
-            mlb = load_pfp_mlb(config['name'], logger)
             
-            filtered_embeddings, filtered_go_terms = filter_cafa_data_by_pfp_vocab(
-                cafa_go_terms, cafa_embeddings, mlb, logger
-            )
-            
-            if len(filtered_embeddings) == 0:
-                logger.warning(f"No proteins remaining after filtering for {ontology}. Skipping.")
-                continue
+            mlb = load_mlb(config['name'])
+            logger.info(f"Loaded MLBs for {len(mlb.classes_)} classes")
             
             effective_thresholds = load_effective_thresholds(config['name'], logger)
-            
-            dataset = TensorDataset(torch.tensor(filtered_embeddings, dtype=torch.float32))
-            data_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
             
             median_probs, mad_uncertainty = compute_ensemble_predictions(
                 models, data_loader, device, logger
             )
             
-            predicted_terms = store_predicted_terms(median_probs, mad_uncertainty, thresholds, mlb)
+            from generate_fdr_predictions import save_both_prediction_formats
+            logger.info("Generating predictions in both original and FDR formats...")
+            predicted_terms, predicted_terms_fdr = save_both_prediction_formats(
+                ontology, median_probs, mad_uncertainty, mlb, thresholds, 
+                effective_thresholds, fdr_levels, args.output_dir
+            )
+            
+            if predicted_terms:
+                logger.info(f"Generated original format: predicted_terms.pkl with {len(predicted_terms)} confidence levels")
+            if predicted_terms_fdr:
+                logger.info(f"Generated FDR format: predicted_terms_fdr.pkl with {len(predicted_terms_fdr)} FDR levels")
+            elif effective_thresholds is None:
+                logger.warning("No effective thresholds available - FDR format not generated")
             
             metrics_df_median = None
             metrics_df_effective = None
             summary_metrics_median = None
             summary_metrics_effective = None
             
-            if not args.fdr_only:
+            if config['tsv'] and not args.skip_metrics and not args.skip_prob_thresholds:
                 try:
                     logger.info("=== Probability Threshold Evaluation (Median vs Median-MAD) ===")
                     metrics_df_median, metrics_df_effective, summary_metrics_median, summary_metrics_effective, _ = evaluate_predictions_cafa(
-                        median_probs, mad_uncertainty, filtered_go_terms, mlb, thresholds, ic_dict, logger
+                        median_probs, mad_uncertainty, config['tsv'], mlb, thresholds, ic_dict, logger
                     )
                     overall_results[f"{ontology}_median_only"] = summary_metrics_median
                     overall_results[f"{ontology}_median_mad"] = summary_metrics_effective
                 except Exception as e:
-                    logger.error(f"Probability threshold evaluation failed for {ontology}: {e}")
-            else:
-                logger.info("=== Skipping approaches 1 & 2 (--fdr_only specified) ===")
+                    logger.error(f"Original evaluation failed for {ontology}: {e}")
             
             fdr_metrics_df = None
-            if not args.skip_fdr and effective_thresholds:
+            if config['tsv'] and not args.skip_metrics and effective_thresholds:
                 try:
-                    logger.info("=== APPROACH 3: FDR Threshold Evaluation ===")
-                    effective_scores = median_probs - mad_uncertainty
+                    logger.info("=== FDR Threshold Evaluation ===")
                     fdr_metrics_df = evaluate_fdr_thresholds(
-                        effective_scores, filtered_go_terms, mlb, effective_thresholds, args.fdr_levels, ic_dict, logger
+                        median_probs, mad_uncertainty, config['tsv'], mlb, effective_thresholds, fdr_levels, ic_dict, logger
                     )
                     all_fdr_results[ontology] = fdr_metrics_df
                 except Exception as e:
@@ -794,21 +821,19 @@ def main():
             logger.info(f"Saved combined FDR metrics to {args.output_dir}/fdr_threshold_metrics_all_ontologies.csv")
         
         logger.info(f"\n{'='*60}")
-        logger.info("CAFA EVALUATION COMPLETED SUCCESSFULLY")
+        logger.info("PREDICTION COMPLETED SUCCESSFULLY")
         logger.info(f"{'='*60}")
+        logger.info(f"Input: {args.fasta if args.fasta else args.embeddings}")
         logger.info(f"Output directory: {args.output_dir}")
         logger.info(f"Processed ontologies: {args.ontologies}")
-        if args.fdr_only:
-            logger.info(f"Evaluation mode: FDR-only (approaches 1 & 2 skipped)")
-            logger.info(f"FDR levels evaluated: {args.fdr_levels}")
-        elif not args.skip_fdr:
-            logger.info(f"Evaluation mode: All three approaches")
-            logger.info(f"FDR levels evaluated: {args.fdr_levels}")
+        logger.info(f"Number of proteins: {embeddings.shape[0]}")
+        if args.fdr_range_start is not None:
+            logger.info(f"FDR range: {args.fdr_range_start} to {args.fdr_range_end} (step: {args.fdr_range_step}, {len(fdr_levels)} levels)")
         else:
-            logger.info(f"Evaluation mode: Approaches 1 & 2 only (FDR skipped)")
+            logger.info(f"FDR levels evaluated: {fdr_levels}")
         
         if overall_results:
-            logger.info("\nPerformance Summary (CAFA Out-of-Distribution):")
+            logger.info("\nOriginal Performance Summary (CAFA-style metrics):")
             
             ontology_groups = {}
             for key, metrics in overall_results.items():
@@ -858,7 +883,7 @@ def main():
         logger.info(f"{'='*60}")
         
     except Exception as e:
-        logger.error(f"CAFA evaluation failed: {str(e)}")
+        logger.error(f"Prediction failed: {str(e)}")
         raise
 
 
