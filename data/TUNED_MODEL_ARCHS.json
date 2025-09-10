@@ -1,0 +1,26 @@
+{
+    "MFO": {
+        "CHOSEN_CONFIG": "LR-0.001_ARCH-[256, 128]_EPOCHS-30_LOSS-Balanced",
+        "CHOSEN_CONFIG_LR": 0.001,
+        "CHOSEN_CONFIG_ARCH": [256, 128],
+        "CHOSEN_CONFIG_EPOCHS": 30,
+        "CHOSEN_CONFIG_LOSS": "Balanced BCE",
+        "NUM_CLASSES": 744
+    },
+    "BPO": {
+        "CHOSEN_CONFIG": "LR-0.001_ARCH-[256, 128]_EPOCHS-20_LOSS-Balanced",
+        "CHOSEN_CONFIG_LR": 0.001,
+        "CHOSEN_CONFIG_ARCH": [256, 128],
+        "CHOSEN_CONFIG_EPOCHS": 20,
+        "CHOSEN_CONFIG_LOSS": "Balanced BCE",
+        "NUM_CLASSES": 1548
+    },
+    "CCO": {
+        "CHOSEN_CONFIG": "LR-0.001_ARCH-[256, 128]_EPOCHS-15_LOSS-Balanced",
+        "CHOSEN_CONFIG_LR": 0.001,
+        "CHOSEN_CONFIG_ARCH": [256, 128],
+        "CHOSEN_CONFIG_EPOCHS": 15,
+        "CHOSEN_CONFIG_LOSS": "Balanced BCE",
+        "NUM_CLASSES": 255
+    }
+}
