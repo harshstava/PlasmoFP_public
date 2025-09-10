@@ -18,7 +18,7 @@ from pathlib import Path
 
 def load_ancestors_data():
     """Load GO ancestors and metadata dictionaries"""
-    base_path = "/Users/harsh/Documents/PFP_PUBLISH/raw_data_from_uniprot"
+    base_path = "raw_data_from_uniprot"
     
     ancestors_data = {}
     json_data = {}
