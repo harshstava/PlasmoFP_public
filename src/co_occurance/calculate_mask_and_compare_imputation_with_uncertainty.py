@@ -24,8 +24,6 @@ from scipy.sparse import csr_matrix
 import random
 import json
 
-sys.path.append('/Users/harsh/Dropbox/Bridge/pfp_final_aug_3/co-occurance')
-
 from build_cooccurrence_matrices_fixed import extract_go_ids_from_text
 
 def filter_to_deepest_terms(go_terms: List[str], ancestors_dict: Dict[str, List[str]]) -> List[str]:
