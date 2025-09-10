@@ -4,10 +4,16 @@ This repository contains all code used to reproduce results in:
 ***PlasmoFP: leveraging deep learning to predict protein function of uncharacterized proteins across the malaria parasite genus***
 
 ---
+We provide step-by-step instructions to reproduce all results from the PlasmoFP paper. Each subsection below corresponds to a main finding. 
 
-## Reproducing Findings
+### Data and trained model availability
 
-Below are the main results sections with associated files and scripts.
+- **Datasets**: Raw and processed data used for training, validation, and testing are available at [INSERT ZENODO LINK] in the `processed_data_90_30` folder
+
+
+- **Pre-trained Models**: Trained model weights for PlasmoFP are included in this repo in the `data` folder. SAR-CNN, CAFA-TM-Vec, and CAFA-CNN model weights are provided in their respective `trained_*` directories at [INSERT ZENODO LINK]
+
+- **Supporting Files**: Additional resources including MultiLabelBinarizer files (`.mlb`) and GO term ancestor files are organized in the `data` folder. 
 
 ---
 
