@@ -1,10 +1,7 @@
 /.DS_Store
+.DS_Store
 *.csv
-*.pkl
-*.pt
-*.json
 *.txt
-*.tsv
 *.fasta
 *.md
 /ALL-TM-Vec_models
@@ -118,3 +115,10 @@
 # /uncertainty_analysis.py
 /utils.py
 /verify_cumulative_fdr_behavior.py
+/data/AIUPred_disorder_prediction
+/data/processed_data_90_30
+/data/raw_data_from_uniprot
+/old_files
+/data/trained_CAFA_CNN_models
+/data/trained_CAFA_TM_Vec
+/data/trained_SAR_CNN_models
