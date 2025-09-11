@@ -8,12 +8,11 @@ We provide step-by-step instructions to reproduce all results from the PlasmoFP 
 
 ### Data and trained model availability
 
-- **Datasets**: Raw and processed data used for training, validation, and testing are available at [INSERT ZENODO LINK] in the `processed_data_90_30` folder
+The `data` folder contains trained PlasmoFP model weights and additional resources including MultiLabelBinarizer files (`.mlb`) and GO term ancestor files. 
 
+The [figshare repository](https://doi.org/10.6084/m9.figshare.30100396.v1) provides unprocessed (`raw_data_from_uniprot`) and processed (`processed_data_90_30`) datasets for PlasmoFP training, validation, and testing, along with trained baseline model weights (SAR-CNN, CAFA-TM-Vec, and CAFA-CNN) in their respective `trained_*` folders.
 
-- **Pre-trained Models**: Trained model weights for PlasmoFP are included in this repo in the `data` folder. SAR-CNN, CAFA-TM-Vec, and CAFA-CNN model weights are provided in their respective `trained_*` directories at [INSERT ZENODO LINK]
-
-- **Supporting Files**: Additional resources including MultiLabelBinarizer files (`.mlb`) and GO term ancestor files are organized in the `data` folder. 
+**Explore PlasmoFP predictions**: Check out [PlasmoFP Explorer](https://github.com/harshstava/PlasmoFP_Explorer) to query model predictions at various eFDR thresholds for all 19 *Plasmodium* species.
 
 ---
 
