@@ -12,7 +12,7 @@ The `data` folder contains trained PlasmoFP model weights and additional resourc
 
 The [figshare repository](https://doi.org/10.6084/m9.figshare.30100396.v1) provides unprocessed (`raw_data_from_uniprot`) and processed (`processed_data_90_30`) datasets for PlasmoFP training, validation, and testing, along with trained baseline model weights (SAR-CNN, CAFA-TM-Vec, and CAFA-CNN) in their respective `trained_*` folders.
 
-**Explore PlasmoFP predictions**: Check out [PlasmoFP Explorer](https://github.com/harshstava/PlasmoFP_Explorer) to query model predictions at various eFDR thresholds for all 19 *Plasmodium* species.
+**Explore PlasmoFP predictions**: Check out [PlasmoFP Explorer](https://github.com/harshstava/PlasmoFP_Explorer) to query model predictions at various eFDR thresholds with GO term clustering analysis for all 19 *Plasmodium* species. We'v also created an [interactive Jupyter notebook](tiny.cc/plasmoFP) hosted through Google Colab to query PlasmoFP predictions,
 
 ---
 
